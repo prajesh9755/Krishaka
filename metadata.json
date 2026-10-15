@@ -1,0 +1,6 @@
+{
+  "name": "Krishaka - Agricultural Marketplace & Farmer Portal",
+  "description": "Bilingual Indian agricultural marketplace connecting farmers directly with institutional buyers, APMC mandi rates, and crop residue monetization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
