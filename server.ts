@@ -1,6 +1,11 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
+import Razorpay from 'razorpay';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 
@@ -155,13 +160,126 @@ const activeOtps = new Map<string, { code: string; expiresAt: number; role: 'far
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
 
+  // Razorpay Gateway Setup
+  const razorpayKeyId = process.env.RAZORPAY_KEY_ID || 'rzp_test_TnrNZFxSp1gbdf';
+  const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET || '4mtIiE43xOCiPQZQIHzOh7SH';
+
+  const razorpay = new Razorpay({
+    key_id: razorpayKeyId,
+    key_secret: razorpayKeySecret,
+  });
+
   // Health check
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', service: 'Krishaka Agri Marketplace API', timestamp: new Date().toISOString() });
+    res.json({
+      status: 'ok',
+      service: 'Krishaka Agri Marketplace API',
+      timestamp: new Date().toISOString(),
+      razorpayConfigured: Boolean(razorpayKeyId && razorpayKeySecret),
+    });
+  });
+
+  // 1. Razorpay: Get Public Key ID for Frontend
+  app.get('/api/payment/key', (req, res) => {
+    res.json({
+      success: true,
+      keyId: razorpayKeyId,
+    });
+  });
+
+  // 2. Razorpay: Create Order Endpoint
+  app.post('/api/payment/create-order', async (req, res) => {
+    try {
+      const { amount, currency = 'INR', receipt, notes = {} } = req.body;
+
+      if (!amount || Number(amount) <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'A valid payment amount (greater than 0) is required.',
+        });
+      }
+
+      // Razorpay expects amount in paise (1 INR = 100 paise)
+      const amountInPaise = Math.round(Number(amount) * 100);
+
+      const options = {
+        amount: amountInPaise,
+        currency: currency.toUpperCase(),
+        receipt: receipt || `krishaka_rcpt_${Date.now()}`,
+        notes: {
+          platform: 'Krishaka Agri Marketplace',
+          ...notes,
+        },
+      };
+
+      const order = await razorpay.orders.create(options);
+
+      res.status(200).json({
+        success: true,
+        orderId: order.id,
+        amount: order.amount,
+        amountInRupees: Number(amount),
+        currency: order.currency,
+        receipt: order.receipt,
+        keyId: razorpayKeyId,
+      });
+    } catch (err: any) {
+      console.error('Razorpay Create Order Error:', err);
+      res.status(500).json({
+        success: false,
+        error: err.error?.description || err.message || 'Failed to create Razorpay payment order',
+      });
+    }
+  });
+
+  // 3. Razorpay: Verify Payment Signature Endpoint
+  app.post('/api/payment/verify', (req, res) => {
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing required payment verification parameters (razorpay_order_id, razorpay_payment_id, razorpay_signature).',
+        });
+      }
+
+      // Generate HMAC-SHA256 signature using key_secret
+      const body = `${razorpay_order_id}|${razorpay_payment_id}`;
+      const expectedSignature = crypto
+        .createHmac('sha256', razorpayKeySecret)
+        .update(body.toString())
+        .digest('hex');
+
+      const isSignatureValid = expectedSignature === razorpay_signature;
+
+      if (isSignatureValid) {
+        res.status(200).json({
+          success: true,
+          verified: true,
+          message: 'Payment signature verified successfully. Escrow funds confirmed.',
+          orderId: razorpay_order_id,
+          paymentId: razorpay_payment_id,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        res.status(400).json({
+          success: false,
+          verified: false,
+          error: 'Invalid payment signature. Verification failed.',
+        });
+      }
+    } catch (err: any) {
+      console.error('Razorpay Verification Error:', err);
+      res.status(500).json({
+        success: false,
+        error: err.message || 'Server error verifying payment signature',
+      });
+    }
   });
 
   // Google Gemini Real-Time Translation API Endpoint
@@ -676,7 +794,14 @@ Text: "${text}"`;
   // Vite middleware for development & production static serving
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        watch: {
+          usePolling: true,
+          interval: 1000,
+          ignored: ['**/*.txt', '**/.git/**', '**/node_modules/**'],
+        },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

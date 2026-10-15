@@ -30,7 +30,11 @@ import {
   Eye,
   User,
   Trash2,
-  ZoomIn
+  ZoomIn,
+  CreditCard,
+  Tag,
+  Gift,
+  Percent
 } from 'lucide-react';
 import { TRANSLATIONS } from '../data/translations';
 import { LanguageSelector } from './LanguageSelector';
@@ -48,9 +52,11 @@ import {
   subscribeToAgriWaste,
   subscribeToRetailers,
   firebaseCreateOrder,
+  firebaseUpdateOrder,
   firebaseDeleteOrder,
   firebaseDeleteUser,
 } from '../firebase';
+import { initiateRazorpayPayment } from '../services/paymentService';
 
 export function BuyerDashboard({
   user,
@@ -111,6 +117,15 @@ export function BuyerDashboard({
   const [orderNotes, setOrderNotes] = useState('');
   const [toastMessage, setToastMessage] = useState('');
 
+  // First-time buyer check (user has 0 orders placed, or never used first coupon)
+  const userOrderCount = myOrders.filter((o) => o.buyerId === user.id).length;
+  const isFirstBuyer = userOrderCount === 0 && localStorage.getItem(`krishaka_first_coupon_used_${user.id}`) !== 'true';
+
+  // Coupon state for order placement
+  const [couponCode, setCouponCode] = useState('FIRST250');
+  const [isCouponApplied, setIsCouponApplied] = useState(false);
+  const [couponError, setCouponError] = useState('');
+
   // Crop Photo Preview Modal
   const [previewCropImage, setPreviewCropImage] = useState(null);
   const [previewWasteImage, setPreviewWasteImage] = useState(null);
@@ -128,16 +143,64 @@ export function BuyerDashboard({
 
   const handleOpenOrderModal = (listing) => {
     setSelectedListingForOrder(listing);
-    setOrderQuantityKg(Math.min(2000, listing.quantityKg));
+    const initialQty = Math.min(2000, listing.quantityKg);
+    setOrderQuantityKg(initialQty);
     setOfferedPrice(listing.pricePerQuintal);
     setOrderNotes('Require Grade A sorted batch in 50kg standard jute bags.');
+    setCouponCode('FIRST250');
+    setCouponError('');
+
+    // Automatically apply coupon if user is a first-time buyer and order total is >= ₹1,000
+    const initialSubtotal = Math.round((initialQty / 100) * listing.pricePerQuintal);
+    if (isFirstBuyer && initialSubtotal >= 1000) {
+      setIsCouponApplied(true);
+    } else {
+      setIsCouponApplied(false);
+    }
   };
 
-  const handlePlaceOrderSubmit = async (e) => {
-    e.preventDefault();
+  const handleApplyCoupon = (codeToApply = couponCode) => {
+    const clean = (codeToApply || '').trim().toUpperCase();
+    if (!clean) {
+      setCouponError('Please enter a coupon code.');
+      return;
+    }
+    const currentSubtotal = Math.round((orderQuantityKg / 100) * offeredPrice);
+    if (clean === 'FIRST250' || clean === 'KRISHAKA250' || clean === 'WELCOME250') {
+      if (!isFirstBuyer) {
+        setCouponError('FIRST250 is valid only on the 1st purchase order for new buyers.');
+        setIsCouponApplied(false);
+        return;
+      }
+      if (currentSubtotal < 1000) {
+        setCouponError(`Order subtotal is ₹${currentSubtotal.toLocaleString()}. Minimum ₹1,000 required for ₹250 discount.`);
+        setIsCouponApplied(false);
+        return;
+      }
+      setIsCouponApplied(true);
+      setCouponError('');
+      showToast('🎉 FIRST250 applied! ₹250 discount activated.');
+    } else {
+      setCouponError('Invalid coupon code. Use FIRST250 for ₹250 off.');
+      setIsCouponApplied(false);
+    }
+  };
+
+  const handleRemoveCoupon = () => {
+    setIsCouponApplied(false);
+    setCouponError('');
+    showToast('Coupon removed.');
+  };
+
+  // Handle order submission (with option to Pay Now with Razorpay Escrow)
+  const handlePlaceOrderSubmit = async (e, payNowWithRazorpay = false) => {
+    if (e && e.preventDefault) e.preventDefault();
     if (!selectedListingForOrder) return;
 
-    const total = Math.round((orderQuantityKg / 100) * offeredPrice);
+    const subtotal = Math.round((orderQuantityKg / 100) * offeredPrice);
+    // Up to ₹250 discount on orders above ₹1,000
+    const discount = isCouponApplied && subtotal >= 1000 ? Math.min(250, subtotal) : 0;
+    const total = Math.max(0, subtotal - discount);
 
     const newOrder = {
       id: `po-${Date.now()}`,
@@ -155,22 +218,114 @@ export function BuyerDashboard({
       quantityKg: orderQuantityKg,
       quantityQuintals: Math.round(orderQuantityKg / 100),
       offeredPricePerQuintal: offeredPrice,
+      subtotalAmount: subtotal,
+      discountAmount: discount,
+      couponCode: discount > 0 ? (couponCode || 'FIRST250').toUpperCase() : null,
       totalAmount: total,
       status: 'pending',
+      paymentStatus: 'pending',
       orderDate: new Date().toISOString().split('T')[0],
       deliveryLocation: deliveryMandi,
       notes: orderNotes,
     };
 
+    if (discount > 0) {
+      localStorage.setItem(`krishaka_first_coupon_used_${user.id}`, 'true');
+    }
+
+    if (payNowWithRazorpay) {
+      // Direct Razorpay Payment Gateway Call with discounted total
+      initiateRazorpayPayment({
+        amount: total,
+        title: 'Krishaka Escrow Deposit',
+        description: `Advance Escrow for ${selectedListingForOrder.cropName} (${orderQuantityKg} kg)${discount > 0 ? ` • ₹${discount} FIRST250 Applied` : ''}`,
+        user: user,
+        notes: {
+          cropName: selectedListingForOrder.cropName,
+          farmerName: selectedListingForOrder.farmerName,
+          buyerFirm: newOrder.buyerFirm,
+          quantityKg: orderQuantityKg,
+          subtotal: subtotal,
+          discount: discount,
+          coupon: discount > 0 ? 'FIRST250' : 'NONE',
+        },
+        onSuccess: async (paymentData) => {
+          const fundedOrder = {
+            ...newOrder,
+            status: 'Escrow Paid',
+            paymentStatus: 'escrow',
+            paymentId: paymentData.paymentId,
+            paidAt: new Date().toISOString(),
+          };
+          setMyOrders([fundedOrder, ...myOrders]);
+          setSelectedListingForOrder(null);
+          showToast(`Order confirmed & ₹${total.toLocaleString()} deposited in Razorpay Escrow! ${discount > 0 ? '(Saved ₹250 with FIRST250)' : ''}`);
+          try {
+            await firebaseCreateOrder(fundedOrder);
+          } catch (err) {
+            console.warn('Firestore order creation notice:', err);
+          }
+        },
+        onError: (errMsg) => {
+          showToast(`Razorpay payment error: ${errMsg}`);
+        },
+      });
+      return;
+    }
+
+    // Standard submission without immediate advance payment
     setMyOrders([newOrder, ...myOrders]);
     setSelectedListingForOrder(null);
-    showToast(`Purchase offer for ${orderQuantityKg}kg of ${selectedListingForOrder.cropName} submitted successfully!`);
+    showToast(`Purchase offer submitted! ${discount > 0 ? `(₹${discount} discount applied via FIRST250)` : ''}`);
 
     try {
       await firebaseCreateOrder(newOrder);
     } catch (err) {
       console.warn('Firestore order creation notice:', err);
     }
+  };
+
+  // Dedicated function to fund escrow for any existing order
+  const handleOrderPayWithRazorpay = (order) => {
+    initiateRazorpayPayment({
+      amount: order.totalAmount,
+      title: 'Krishaka Escrow Payment',
+      description: `Escrow Payment for Order #${order.id} (${order.produceName || order.cropName})`,
+      user: user,
+      notes: {
+        orderId: order.id,
+        farmerName: order.farmerName,
+        produceName: order.produceName || order.cropName,
+      },
+      onSuccess: async (paymentData) => {
+        const updatedOrders = myOrders.map((o) =>
+          o.id === order.id
+            ? {
+                ...o,
+                status: 'Escrow Paid',
+                paymentStatus: 'escrow',
+                paymentId: paymentData.paymentId,
+                paidAt: new Date().toISOString(),
+              }
+            : o
+        );
+        setMyOrders(updatedOrders);
+        showToast(`Escrow of ₹${order.totalAmount.toLocaleString()} funded via Razorpay! (ID: ${paymentData.paymentId})`);
+        try {
+          await firebaseUpdateOrder(order.id, {
+            status: 'Escrow Paid',
+            paymentStatus: 'escrow',
+            paymentId: paymentData.paymentId,
+            paidAt: new Date().toISOString(),
+          });
+        } catch (err) {
+          console.warn('Error updating order payment status in Firebase:', err);
+        }
+      },
+      onError: (errMsg) => {
+        showToast(`Razorpay payment failed: ${errMsg}`);
+      },
+    });
   };
 
   // Filtered Produce Listings
@@ -422,6 +577,37 @@ export function BuyerDashboard({
         {/* TAB 1: BROWSE FARM HARVEST LOTS */}
         {activeTab === 'marketplace' && (
           <div className="space-y-6">
+
+            {/* First-Time Buyer Welcome Voucher Banner */}
+            {isFirstBuyer && (
+              <div className="bg-gradient-to-r from-[#FFF8EE] via-[#FDF5EB] to-[#FCEEE7] rounded-2xl p-4 sm:p-5 border border-[#B8562D]/30 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4 animate-in fade-in">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-2xl bg-[#B8562D] text-white flex items-center justify-center shrink-0 shadow-xs">
+                    <Gift className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-headline font-bold text-base text-[#1A1C18]">
+                        First Buyer Welcome Offer!
+                      </span>
+                      <span className="font-mono text-xs font-bold bg-[#B8562D] text-white px-2.5 py-0.5 rounded-full shadow-2xs">
+                        FIRST250
+                      </span>
+                    </div>
+                    <p className="text-xs text-[#1A1C18]/80 mt-0.5">
+                      Get <strong>₹250 OFF</strong> on your very first agricultural lot procurement of <strong>₹1,000 or more</strong>.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-[#3F6B3A] bg-[#E2ECD8] px-3 py-1.5 rounded-xl border border-[#3F6B3A]/30">
+                    <Sparkles className="w-4 h-4 text-[#3F6B3A]" />
+                    <span>Auto-applied at checkout</span>
+                  </div>
+                </div>
+              </div>
+            )}
             
             {/* Search & Filter Toolbar */}
             <div className="bg-white rounded-2xl p-4 border border-[#DCD6C8] shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
@@ -803,13 +989,27 @@ export function BuyerDashboard({
                       </h3>
                       <span
                         className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full ${
-                          order.status === 'Accepted'
+                          order.status === 'Escrow Paid' || order.paymentStatus === 'escrow'
+                            ? 'bg-[#3F6B3A]/10 text-[#3F6B3A] border border-[#3F6B3A]/30'
+                            : order.status === 'Accepted'
                             ? 'bg-[#3F6B3A]/10 text-[#3F6B3A] border border-[#3F6B3A]/30'
                             : 'bg-[#B8562D]/10 text-[#B8562D] border border-[#B8562D]/30'
                         }`}
                       >
                         {order.status}
                       </span>
+                      {order.paymentStatus === 'escrow' && (
+                        <span className="text-[10px] font-bold bg-[#3F6B3A] text-white px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" />
+                          <span>Escrow Funded</span>
+                        </span>
+                      )}
+                      {order.discountAmount > 0 && (
+                        <span className="text-[10px] font-bold bg-[#E2ECD8] text-[#3F6B3A] border border-[#3F6B3A]/30 px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <Tag className="w-3 h-3" />
+                          <span>₹{order.discountAmount} FIRST250 Saved</span>
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#1A1C18]/70">
@@ -817,6 +1017,11 @@ export function BuyerDashboard({
                       <span>&bull; Contact: <strong>{order.farmerPhone}</strong></span>
                       <span>&bull; Delivery To: {order.deliveryLocation}</span>
                       <span>&bull; Date: {order.orderDate}</span>
+                      {order.paymentId && (
+                        <span className="text-[#3F6B3A] font-mono text-[11px]">
+                          &bull; Razorpay ID: <strong>{order.paymentId}</strong>
+                        </span>
+                      )}
                     </div>
 
                     {order.notes && (
@@ -832,18 +1037,42 @@ export function BuyerDashboard({
                       <div className="font-headline font-bold text-xl text-[#B8562D] font-mono">
                         ₹{order.totalAmount.toLocaleString()}
                       </div>
+                      {order.discountAmount > 0 && (
+                        <div className="text-[10px] text-[#3F6B3A] font-semibold">
+                          (₹{order.subtotalAmount?.toLocaleString()} - ₹{order.discountAmount} FIRST250)
+                        </div>
+                      )}
                       <div className="text-[11px] text-[#1A1C18]/70">
                         {order.quantityKg} kg @ ₹{order.offeredPricePerQuintal}/Qtl
                       </div>
                     </div>
 
-                    <a
-                      href={`tel:${order.farmerPhone}`}
-                      className="flex items-center gap-1 px-3 py-1.5 bg-[#F4F1E8] hover:bg-[#EBE7DC] text-[#1A1C18] rounded-lg text-xs font-bold border border-[#DCD6C8] transition-all cursor-pointer"
-                    >
-                      <Phone className="w-3.5 h-3.5 text-[#3F6B3A]" />
-                      <span>Contact Farmer</span>
-                    </a>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {order.paymentStatus === 'escrow' || order.status === 'Escrow Paid' ? (
+                        <div className="flex items-center gap-1 px-3 py-1.5 bg-[#E2ECD8] text-[#3F6B3A] border border-[#3F6B3A]/30 rounded-lg text-xs font-bold">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Escrow Secured</span>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleOrderPayWithRazorpay(order)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-[#3F6B3A] hover:bg-[#32562e] text-white rounded-lg text-xs font-bold shadow-2xs transition-all cursor-pointer"
+                          title="Fund this contract via Razorpay Payment Gateway"
+                        >
+                          <CreditCard className="w-3.5 h-3.5" />
+                          <span>Pay Escrow (Razorpay)</span>
+                        </button>
+                      )}
+
+                      <a
+                        href={`tel:${order.farmerPhone}`}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-[#F4F1E8] hover:bg-[#EBE7DC] text-[#1A1C18] rounded-lg text-xs font-bold border border-[#DCD6C8] transition-all cursor-pointer"
+                      >
+                        <Phone className="w-3.5 h-3.5 text-[#3F6B3A]" />
+                        <span>Contact Farmer</span>
+                      </a>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -1000,15 +1229,162 @@ export function BuyerDashboard({
                 />
               </div>
 
-              {/* Deal Total Calculation */}
-              <div className="p-3 bg-[#FCEEE7] rounded-xl border border-[#B8562D]/30 flex items-center justify-between">
-                <span className="text-xs font-bold text-[#1A1C18]">Calculated Offer Total:</span>
-                <span className="font-headline font-bold text-lg text-[#B8562D] font-mono">
-                  ₹{Math.round((orderQuantityKg / 100) * offeredPrice).toLocaleString()}
-                </span>
+              {/* Discount Coupon & First Buyer Offer Section */}
+              <div className="bg-[#FAF8F5] p-3.5 rounded-xl border border-[#DCD6C8] space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-[#1A1C18]">
+                    <Tag className="w-3.5 h-3.5 text-[#B8562D]" />
+                    <span>Apply Discount Coupon</span>
+                  </div>
+                  {isFirstBuyer && (
+                    <span className="text-[10px] font-bold text-[#3F6B3A] bg-[#E2ECD8] px-2 py-0.5 rounded-full flex items-center gap-1">
+                      <Gift className="w-3 h-3" />
+                      <span>New Buyer Offer</span>
+                    </span>
+                  )}
+                </div>
+
+                {/* First Buyer Exclusive Voucher Box */}
+                {isFirstBuyer && (
+                  <div
+                    className={`p-3 rounded-xl border text-xs transition-all ${
+                      Math.round((orderQuantityKg / 100) * offeredPrice) >= 1000
+                        ? isCouponApplied
+                          ? 'bg-[#E2ECD8]/50 border-[#3F6B3A]'
+                          : 'bg-[#FFF8EE] border-[#B8562D]/40'
+                        : 'bg-amber-50 border-amber-200 text-[#1A1C18]/80'
+                    }`}
+                  >
+                    <div className="flex items-start sm:items-center justify-between gap-2">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-xs bg-white px-2 py-0.5 rounded border border-[#DCD6C8] text-[#B8562D]">
+                            FIRST250
+                          </span>
+                          <span className="font-bold text-xs text-[#1A1C18]">
+                            Flat ₹250 OFF on orders above ₹1,000
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-[#1A1C18]/70">
+                          {Math.round((orderQuantityKg / 100) * offeredPrice) >= 1000
+                            ? 'Special welcome gift for your first produce trade on Krishaka.'
+                            : `Add ₹${(1000 - Math.round((orderQuantityKg / 100) * offeredPrice)).toLocaleString()} more to your order to unlock this discount!`}
+                        </p>
+                      </div>
+
+                      {Math.round((orderQuantityKg / 100) * offeredPrice) >= 1000 && (
+                        <div>
+                          {isCouponApplied ? (
+                            <button
+                              type="button"
+                              onClick={handleRemoveCoupon}
+                              className="px-2.5 py-1 text-[11px] font-bold text-red-600 hover:bg-red-50 rounded-lg cursor-pointer transition-colors"
+                            >
+                              Remove
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleApplyCoupon('FIRST250')}
+                              className="px-3.5 py-1.5 bg-[#B8562D] hover:bg-[#9E4823] text-white text-xs font-bold rounded-lg cursor-pointer shadow-2xs transition-all"
+                            >
+                              Apply
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Coupon Code Manual Input */}
+                {!isCouponApplied ? (
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={couponCode}
+                      onChange={(e) => {
+                        setCouponCode(e.target.value.toUpperCase());
+                        setCouponError('');
+                      }}
+                      placeholder="Enter coupon code (e.g. FIRST250)"
+                      className="flex-1 py-1.5 px-3 rounded-lg border border-[#DCD6C8] text-xs uppercase font-mono tracking-wider focus:border-[#B8562D] focus:outline-hidden bg-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleApplyCoupon(couponCode)}
+                      className="px-4 py-1.5 bg-[#1A1C18] hover:bg-black text-white text-xs font-bold rounded-lg cursor-pointer transition-colors"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between p-2 bg-[#E2ECD8] rounded-lg border border-[#3F6B3A]/30 text-xs text-[#3F6B3A] font-semibold">
+                    <span className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-[#3F6B3A]" />
+                      <span>Coupon <strong>FIRST250</strong> active: ₹250 Discount applied</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleRemoveCoupon}
+                      className="text-xs text-[#B8562D] font-bold hover:underline cursor-pointer ml-2"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+
+                {couponError && (
+                  <p className="text-[11px] text-red-600 flex items-center gap-1 font-medium bg-red-50 p-2 rounded-lg border border-red-200">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{couponError}</span>
+                  </p>
+                )}
               </div>
 
-              <div className="pt-2 flex justify-end gap-2">
+              {/* Deal Total Calculation Breakdown */}
+              {(() => {
+                const subtotal = Math.round((orderQuantityKg / 100) * offeredPrice);
+                const discount = isCouponApplied && subtotal >= 1000 ? Math.min(250, subtotal) : 0;
+                const payable = Math.max(0, subtotal - discount);
+
+                return (
+                  <div className="p-3.5 bg-[#FCEEE7] rounded-xl border border-[#B8562D]/30 space-y-2">
+                    <div className="flex items-center justify-between text-xs text-[#1A1C18]/80">
+                      <span>Order Subtotal ({orderQuantityKg} kg @ ₹{offeredPrice}/Qtl):</span>
+                      <span className="font-mono font-bold text-sm">₹{subtotal.toLocaleString()}</span>
+                    </div>
+
+                    {discount > 0 && (
+                      <div className="flex items-center justify-between text-xs text-[#3F6B3A] font-bold">
+                        <span className="flex items-center gap-1.5">
+                          <Tag className="w-3.5 h-3.5" />
+                          <span>First Buyer Discount (FIRST250):</span>
+                        </span>
+                        <span className="font-mono text-sm">- ₹{discount.toLocaleString()}</span>
+                      </div>
+                    )}
+
+                    <div className="pt-2 border-t border-[#B8562D]/20 flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-[#1A1C18] block">Final Payable Total:</span>
+                        {discount > 0 ? (
+                          <span className="text-[11px] text-[#3F6B3A] font-bold">
+                            🎉 You save ₹{discount} on this first order!
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-[#1A1C18]/60">All taxes & mandi levies inclusive</span>
+                        )}
+                      </div>
+                      <span className="font-headline font-bold text-2xl text-[#B8562D] font-mono">
+                        ₹{payable.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setSelectedListingForOrder(null)}
@@ -1017,10 +1393,20 @@ export function BuyerDashboard({
                   Cancel
                 </button>
                 <button
-                  type="submit"
-                  className="px-5 py-2 text-xs font-bold bg-[#B8562D] hover:bg-[#9E4823] text-white rounded-lg shadow-2xs cursor-pointer"
+                  type="button"
+                  onClick={(e) => handlePlaceOrderSubmit(e, false)}
+                  className="px-4 py-2 text-xs font-bold bg-[#F4F1E8] hover:bg-[#EBE7DC] text-[#1A1C18] border border-[#DCD6C8] rounded-lg shadow-2xs cursor-pointer"
                 >
-                  Dispatch Purchase Offer
+                  Place Offer (Pay Later)
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => handlePlaceOrderSubmit(e, true)}
+                  className="px-5 py-2 text-xs font-bold bg-[#3F6B3A] hover:bg-[#32562e] text-white rounded-lg shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer"
+                  title="Direct secure escrow deposit via Razorpay"
+                >
+                  <CreditCard className="w-3.5 h-3.5" />
+                  <span>Pay Now via Razorpay</span>
                 </button>
               </div>
             </form>
