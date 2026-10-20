@@ -34,7 +34,12 @@ import {
   CreditCard,
   Tag,
   Gift,
-  Percent
+  Percent,
+  ShoppingCart,
+  Plus,
+  Minus,
+  Check,
+  ArrowRight
 } from 'lucide-react';
 import { TRANSLATIONS } from '../data/translations';
 import { LanguageSelector } from './LanguageSelector';
@@ -120,6 +125,315 @@ export function BuyerDashboard({
   // First-time buyer check (user has 0 orders placed, or never used first coupon)
   const userOrderCount = myOrders.filter((o) => o.buyerId === user.id).length;
   const isFirstBuyer = userOrderCount === 0 && localStorage.getItem(`krishaka_first_coupon_used_${user.id}`) !== 'true';
+
+  // -------------------------------------------------------------
+  // SHOPPING CART STATE & PERSISTENCE
+  // -------------------------------------------------------------
+  const [cartItems, setCartItems] = useState(() => {
+    try {
+      const saved = localStorage.getItem(`krishaka_cart_${user.id}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isCartDrawerOpen, setIsCartDrawerOpen] = useState(false);
+  const [cartDeliveryMandi, setCartDeliveryMandi] = useState(user.buyerDetails?.deliveryCity || 'Navi Mumbai APMC');
+  const [cartNotes, setCartNotes] = useState('Standard packaging in jute bags, direct farm dispatch.');
+  const [cartCouponCode, setCartCouponCode] = useState('FIRST250');
+  const [isCartCouponApplied, setIsCartCouponApplied] = useState(false);
+  const [cartCouponError, setCartCouponError] = useState('');
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
+
+  // Sync cart to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem(`krishaka_cart_${user.id}`, JSON.stringify(cartItems));
+    } catch (e) {
+      console.warn('Failed to save cart to localStorage', e);
+    }
+  }, [cartItems, user.id]);
+
+  // Compute Cart Financials
+  const cartSubtotal = cartItems.reduce((acc, item) => {
+    const qty = Number(item.quantityKg) || 0;
+    const price = Number(item.pricePerQuintal) || 0;
+    return acc + Math.round((qty / 100) * price);
+  }, 0);
+
+  const cartTotalWeightKg = cartItems.reduce((acc, item) => acc + (Number(item.quantityKg) || 0), 0);
+
+  // Auto-apply FIRST250 coupon if eligible and subtotal >= 1000
+  useEffect(() => {
+    if (isFirstBuyer && cartSubtotal >= 1000 && !isCartCouponApplied && !cartCouponError) {
+      setIsCartCouponApplied(true);
+    }
+  }, [isFirstBuyer, cartSubtotal]);
+
+  const cartDiscount = isCartCouponApplied && cartSubtotal >= 1000 ? Math.min(250, cartSubtotal) : 0;
+  const cartFinalTotal = Math.max(0, cartSubtotal - cartDiscount);
+
+  // Add Item to Cart
+  const handleAddToCart = (listing, customQty) => {
+    const existingIndex = cartItems.findIndex((it) => it.id === listing.id);
+    const maxQty = listing.quantityKg || 5000;
+
+    if (existingIndex >= 0) {
+      // Already in cart - increment or update
+      const existing = cartItems[existingIndex];
+      const additional = customQty || 200;
+      const updatedQty = Math.min(maxQty, existing.quantityKg + additional);
+      const updatedList = [...cartItems];
+      updatedList[existingIndex] = { ...existing, quantityKg: updatedQty };
+      setCartItems(updatedList);
+      showToast(`🛒 Updated ${listing.cropName} in your cart (${updatedQty.toLocaleString()} kg)`);
+    } else {
+      // New item to cart
+      const initialQty = customQty ? Math.min(maxQty, customQty) : Math.min(maxQty, 1000);
+      const newItem = {
+        id: listing.id,
+        produceId: listing.id,
+        cropName: listing.cropName,
+        variety: listing.variety,
+        farmerId: listing.farmerId || 'farmer-demo',
+        farmerName: listing.farmerName,
+        farmerPhone: listing.farmerPhone,
+        location: listing.location,
+        qualityGrade: listing.qualityGrade || 'A',
+        isOrganic: Boolean(listing.isOrganic),
+        imageUrl: listing.imageUrl,
+        pricePerQuintal: Number(listing.pricePerQuintal),
+        quantityKg: initialQty,
+        maxQuantityKg: maxQty,
+        harvestDate: listing.harvestDate,
+      };
+      setCartItems([...cartItems, newItem]);
+      showToast(`🛒 Added ${listing.cropName} (${initialQty.toLocaleString()} kg) to your cart!`);
+    }
+  };
+
+  // Add Agri-Waste / Biomass to Cart
+  const handleAddWasteToCart = (waste) => {
+    const existingIndex = cartItems.findIndex((it) => it.id === waste.id);
+    if (existingIndex >= 0) {
+      showToast(`Biomass lot #${waste.id} is already in your cart!`);
+      return;
+    }
+    const newItem = {
+      id: waste.id,
+      produceId: waste.id,
+      cropName: `${waste.wasteType} (Biomass)`,
+      variety: waste.suggestedUse,
+      farmerId: waste.farmerId || 'farmer-demo',
+      farmerName: waste.farmerName,
+      farmerPhone: waste.farmerPhone,
+      location: waste.location,
+      qualityGrade: 'Bale',
+      isOrganic: false,
+      imageUrl: waste.imageUrl,
+      pricePerQuintal: Math.round(Number(waste.pricePerTon) / 10),
+      quantityKg: Math.min(waste.quantityTons * 1000, 2000),
+      maxQuantityKg: waste.quantityTons * 1000,
+      isBiomass: true,
+      pricePerTon: waste.pricePerTon,
+    };
+    setCartItems([...cartItems, newItem]);
+    showToast(`🛒 Added ${waste.wasteType} biomass to your cart!`);
+  };
+
+  // Update Cart Quantity
+  const handleUpdateCartQuantity = (itemId, newQty) => {
+    const item = cartItems.find((it) => it.id === itemId);
+    if (!item) return;
+    const clamped = Math.max(50, Math.min(item.maxQuantityKg, newQty));
+    setCartItems(cartItems.map((it) => (it.id === itemId ? { ...it, quantityKg: clamped } : it)));
+  };
+
+  // Remove Item from Cart
+  const handleRemoveFromCart = (itemId) => {
+    const item = cartItems.find((it) => it.id === itemId);
+    setCartItems(cartItems.filter((it) => it.id !== itemId));
+    showToast(`Removed ${item ? item.cropName : 'item'} from cart.`);
+  };
+
+  // Clear Entire Cart
+  const handleClearCart = () => {
+    setCartItems([]);
+    showToast('Procurement cart cleared.');
+  };
+
+  // Apply Cart Coupon
+  const handleApplyCartCoupon = (code = cartCouponCode) => {
+    const clean = (code || '').trim().toUpperCase();
+    if (!clean) {
+      setCartCouponError('Please enter a coupon code.');
+      return;
+    }
+    if (clean === 'FIRST250' || clean === 'KRISHAKA250' || clean === 'WELCOME250') {
+      if (!isFirstBuyer) {
+        setCartCouponError('FIRST250 is valid only on the 1st purchase order for new buyers.');
+        setIsCartCouponApplied(false);
+        return;
+      }
+      if (cartSubtotal < 1000) {
+        setCartCouponError(`Cart subtotal is ₹${cartSubtotal.toLocaleString()}. Minimum ₹1,000 required for discount.`);
+        setIsCartCouponApplied(false);
+        return;
+      }
+      setIsCartCouponApplied(true);
+      setCartCouponError('');
+      showToast('🎉 FIRST250 applied! ₹250 discount active on cart checkout.');
+    } else {
+      setCartCouponError('Invalid coupon code. Use FIRST250 for ₹250 off.');
+      setIsCartCouponApplied(false);
+    }
+  };
+
+  const handleRemoveCartCoupon = () => {
+    setIsCartCouponApplied(false);
+    setCartCouponError('');
+    showToast('Coupon removed from cart.');
+  };
+
+  // Direct Purchase from Cart
+  const handleCartPurchaseDirect = async (payWithRazorpay = true) => {
+    if (cartItems.length === 0) {
+      showToast('Your cart is empty! Add farm lots before checking out.');
+      return;
+    }
+    setIsCheckingOut(true);
+
+    if (payWithRazorpay) {
+      initiateRazorpayPayment({
+        amount: cartFinalTotal,
+        title: 'Krishaka Cart Bulk Checkout',
+        description: `Direct Escrow for ${cartItems.length} Lots (${cartTotalWeightKg.toLocaleString()} kg)${cartDiscount > 0 ? ' • ₹250 FIRST250 Applied' : ''}`,
+        user: user,
+        notes: {
+          cartLotsCount: cartItems.length,
+          totalWeightKg: cartTotalWeightKg,
+          subtotal: cartSubtotal,
+          discount: cartDiscount,
+          buyerFirm: user.buyerDetails?.businessName || `${user.name} Trading Co.`,
+          destination: cartDeliveryMandi,
+        },
+        onSuccess: async (paymentData) => {
+          setIsCheckingOut(false);
+          const newOrdersCreated = [];
+
+          for (const item of cartItems) {
+            const itemSubtotal = Math.round((item.quantityKg / 100) * item.pricePerQuintal);
+            const discountShare = cartSubtotal > 0 ? Math.round((itemSubtotal / cartSubtotal) * cartDiscount) : 0;
+            const itemTotal = Math.max(0, itemSubtotal - discountShare);
+
+            const order = {
+              id: `po-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+              produceId: item.id,
+              cropName: item.cropName,
+              produceName: item.cropName,
+              variety: item.variety,
+              farmerId: item.farmerId || 'farmer-demo',
+              farmerName: item.farmerName,
+              farmerPhone: item.farmerPhone,
+              buyerId: user.id,
+              buyerName: user.name,
+              buyerPhone: user.phone,
+              buyerFirm: user.buyerDetails?.businessName || `${user.name} Agro Firm`,
+              quantityKg: item.quantityKg,
+              quantityQuintals: Math.round(item.quantityKg / 100),
+              offeredPricePerQuintal: item.pricePerQuintal,
+              subtotalAmount: itemSubtotal,
+              discountAmount: discountShare,
+              couponCode: cartDiscount > 0 ? (cartCouponCode || 'FIRST250').toUpperCase() : null,
+              totalAmount: itemTotal,
+              status: 'Escrow Paid',
+              paymentStatus: 'escrow',
+              paymentId: paymentData.paymentId,
+              paidAt: new Date().toISOString(),
+              orderDate: new Date().toISOString().split('T')[0],
+              deliveryLocation: cartDeliveryMandi,
+              notes: cartNotes,
+            };
+
+            newOrdersCreated.push(order);
+            try {
+              await firebaseCreateOrder(order);
+            } catch (err) {
+              console.warn('Firebase order create notice:', err);
+            }
+          }
+
+          if (cartDiscount > 0) {
+            localStorage.setItem(`krishaka_first_coupon_used_${user.id}`, 'true');
+          }
+
+          setMyOrders([...newOrdersCreated, ...myOrders]);
+          setCartItems([]);
+          setIsCartDrawerOpen(false);
+          setActiveTab('my-orders');
+          showToast(`🎉 ₹${cartFinalTotal.toLocaleString()} Paid! ${newOrdersCreated.length} orders successfully purchased and secured in Escrow.`);
+        },
+        onError: (errMsg) => {
+          setIsCheckingOut(false);
+          showToast(`Razorpay Checkout Error: ${errMsg}`);
+        },
+      });
+      return;
+    }
+
+    // Pay Later / Place Offers from Cart
+    const newOrdersCreated = [];
+    for (const item of cartItems) {
+      const itemSubtotal = Math.round((item.quantityKg / 100) * item.pricePerQuintal);
+      const discountShare = cartSubtotal > 0 ? Math.round((itemSubtotal / cartSubtotal) * cartDiscount) : 0;
+      const itemTotal = Math.max(0, itemSubtotal - discountShare);
+
+      const order = {
+        id: `po-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        produceId: item.id,
+        cropName: item.cropName,
+        produceName: item.cropName,
+        variety: item.variety,
+        farmerId: item.farmerId || 'farmer-demo',
+        farmerName: item.farmerName,
+        farmerPhone: item.farmerPhone,
+        buyerId: user.id,
+        buyerName: user.name,
+        buyerPhone: user.phone,
+        buyerFirm: user.buyerDetails?.businessName || `${user.name} Agro Firm`,
+        quantityKg: item.quantityKg,
+        quantityQuintals: Math.round(item.quantityKg / 100),
+        offeredPricePerQuintal: item.pricePerQuintal,
+        subtotalAmount: itemSubtotal,
+        discountAmount: discountShare,
+        couponCode: cartDiscount > 0 ? (cartCouponCode || 'FIRST250').toUpperCase() : null,
+        totalAmount: itemTotal,
+        status: 'pending',
+        paymentStatus: 'pending',
+        orderDate: new Date().toISOString().split('T')[0],
+        deliveryLocation: cartDeliveryMandi,
+        notes: cartNotes,
+      };
+
+      newOrdersCreated.push(order);
+      try {
+        await firebaseCreateOrder(order);
+      } catch (err) {
+        console.warn('Firebase order create notice:', err);
+      }
+    }
+
+    if (cartDiscount > 0) {
+      localStorage.setItem(`krishaka_first_coupon_used_${user.id}`, 'true');
+    }
+
+    setMyOrders([...newOrdersCreated, ...myOrders]);
+    setCartItems([]);
+    setIsCartDrawerOpen(false);
+    setIsCheckingOut(false);
+    setActiveTab('my-orders');
+    showToast(`✅ ${newOrdersCreated.length} procurement orders placed! View them in My Orders.`);
+  };
 
   // Coupon state for order placement
   const [couponCode, setCouponCode] = useState('FIRST250');
@@ -350,6 +664,425 @@ export function BuyerDashboard({
     return matchesSearch && matchesType;
   });
 
+  // -------------------------------------------------------------
+  // RENDER CART CONTENT (REUSABLE FOR TAB & DRAWER)
+  // -------------------------------------------------------------
+  const renderCartContent = (isDrawer = false) => {
+    if (cartItems.length === 0) {
+      return (
+        <div className="bg-white rounded-2xl p-8 sm:p-12 border border-[#DCD6C8] shadow-xs text-center space-y-4 max-w-lg mx-auto my-6">
+          <div className="w-16 h-16 rounded-2xl bg-[#B8562D]/10 text-[#B8562D] flex items-center justify-center mx-auto shadow-2xs">
+            <ShoppingCart className="w-8 h-8" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="font-headline font-bold text-xl text-[#1A1C18]">Your Procurement Cart is Empty</h3>
+            <p className="text-xs text-[#1A1C18]/70 max-w-sm mx-auto">
+              You haven't added any produce lots to your cart yet. Explore verified farmer harvest listings across mandis to purchase directly.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setIsCartDrawerOpen(false);
+              setActiveTab('marketplace');
+            }}
+            className="px-5 py-2.5 bg-[#B8562D] hover:bg-[#9E4823] text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer inline-flex items-center gap-2"
+          >
+            <Wheat className="w-4 h-4" />
+            <span>Browse Farm Harvest Lots</span>
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div className={isDrawer ? "space-y-4" : "grid grid-cols-1 lg:grid-cols-12 gap-6 items-start"}>
+        
+        {/* Left Section: Items list + Delivery & Logistics Details */}
+        <div className={isDrawer ? "space-y-4" : "lg:col-span-8 space-y-5"}>
+          
+          {/* Welcome Offer Banner in Cart */}
+          {isFirstBuyer && (
+            <div className="bg-gradient-to-r from-[#FFF8EE] via-[#FDF5EB] to-[#FCEEE7] rounded-2xl p-4 border border-[#B8562D]/30 flex items-center justify-between gap-3 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#B8562D] text-white flex items-center justify-center shrink-0">
+                  <Gift className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-xs text-[#1A1C18]">First-Time Buyer Welcome Voucher</span>
+                    <span className="font-mono text-[10px] font-bold bg-[#B8562D] text-white px-2 py-0.5 rounded">FIRST250</span>
+                  </div>
+                  <p className="text-[11px] text-[#1A1C18]/75 mt-0.5">
+                    {cartSubtotal >= 1000
+                      ? '₹250 discount unlocked and applied to your cart order!'
+                      : `Add ₹${(1000 - cartSubtotal).toLocaleString()} more produce to unlock ₹250 discount.`}
+                  </p>
+                </div>
+              </div>
+              {cartSubtotal >= 1000 && isCartCouponApplied && (
+                <span className="text-[10px] font-bold text-[#3F6B3A] bg-[#E2ECD8] px-2.5 py-1 rounded-full border border-[#3F6B3A]/30 shrink-0 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" />
+                  <span>Applied</span>
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Cart Items Cards */}
+          <div className="space-y-3">
+            {cartItems.map((item) => {
+              const itemLineTotal = Math.round((item.quantityKg / 100) * item.pricePerQuintal);
+              return (
+                <div
+                  key={item.id}
+                  className="bg-white rounded-2xl p-4 border border-[#DCD6C8] shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 hover:border-[#B8562D]/30 transition-all"
+                >
+                  <div className="flex items-start gap-3.5 flex-1 min-w-0">
+                    <div className="w-20 h-20 sm:w-22 sm:h-22 rounded-xl bg-[#EBE7DC] overflow-hidden shrink-0 border border-[#DCD6C8] relative group">
+                      <img
+                        src={item.imageUrl}
+                        alt={item.cropName}
+                        className="w-full h-full object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setPreviewCropImage(item)}
+                        className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white cursor-pointer"
+                        title="View photo"
+                      >
+                        <ZoomIn className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-1 min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <h4 className="font-headline font-bold text-base text-[#1A1C18] truncate">
+                          {item.cropName}
+                        </h4>
+                        <span className="text-[10px] font-bold bg-[#1A1C18]/80 text-white px-1.5 py-0.5 rounded">
+                          Grade {item.qualityGrade}
+                        </span>
+                        {item.isOrganic && (
+                          <span className="text-[10px] font-bold bg-[#3F6B3A] text-white px-1.5 py-0.5 rounded">
+                            Organic
+                          </span>
+                        )}
+                        {item.isBiomass && (
+                          <span className="text-[10px] font-bold bg-[#8C7A3E] text-white px-1.5 py-0.5 rounded">
+                            Biomass
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-[#1A1C18]/70 truncate">{item.variety}</p>
+
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-[#1A1C18]/60">
+                        <span>Farmer: <strong className="text-[#1A1C18]">{item.farmerName}</strong></span>
+                        <span>&bull;</span>
+                        <span className="flex items-center gap-0.5">
+                          <MapPin className="w-3 h-3 text-[#B8562D]" />
+                          <span>{item.location}</span>
+                        </span>
+                      </div>
+
+                      <div className="flex items-baseline gap-2 pt-1 text-xs">
+                        <span className="text-[#1A1C18]/60">Rate:</span>
+                        <strong className="text-[#B8562D] font-mono font-bold">
+                          {item.isBiomass ? `₹${item.pricePerTon}/Ton` : `₹${item.pricePerQuintal}/Qtl`}
+                        </strong>
+                        <span className="text-[10px] text-[#1A1C18]/50">
+                          (Max: {item.maxQuantityKg?.toLocaleString()} kg)
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Quantity Stepper & Price Column */}
+                  <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-2 pt-3 sm:pt-0 border-t sm:border-t-0 border-[#EBE7DC] shrink-0">
+                    <div className="text-left sm:text-right">
+                      <span className="text-[10px] text-[#1A1C18]/60 block uppercase font-semibold">Lot Total</span>
+                      <span className="font-headline font-bold text-lg text-[#B8562D] font-mono block">
+                        ₹{itemLineTotal.toLocaleString()}
+                      </span>
+                    </div>
+
+                    {/* Quantity Stepper */}
+                    <div className="flex items-center gap-1.5">
+                      <div className="flex items-center border border-[#DCD6C8] rounded-lg bg-[#FAF8F5] overflow-hidden shadow-2xs">
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateCartQuantity(item.id, item.quantityKg - 100)}
+                          className="px-2 py-1 text-xs font-bold text-[#1A1C18] hover:bg-[#EBE7DC] transition-colors cursor-pointer"
+                          title="Decrease by 100 kg"
+                        >
+                          <Minus className="w-3 h-3" />
+                        </button>
+                        <input
+                          type="number"
+                          min="50"
+                          max={item.maxQuantityKg}
+                          value={item.quantityKg}
+                          onChange={(e) => handleUpdateCartQuantity(item.id, parseInt(e.target.value) || 50)}
+                          className="w-16 text-center text-xs font-bold text-[#1A1C18] border-x border-[#DCD6C8] py-1 bg-white focus:outline-hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateCartQuantity(item.id, item.quantityKg + 100)}
+                          className="px-2 py-1 text-xs font-bold text-[#1A1C18] hover:bg-[#EBE7DC] transition-colors cursor-pointer"
+                          title="Increase by 100 kg"
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                      </div>
+                      <span className="text-[11px] font-semibold text-[#1A1C18]/60">kg</span>
+
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveFromCart(item.id)}
+                        className="p-1.5 text-[#1A1C18]/40 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors cursor-pointer ml-1"
+                        title="Remove lot from cart"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* Quick Single Item Buy */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCartDrawerOpen(false);
+                        handleOpenOrderModal({
+                          id: item.id,
+                          cropName: item.cropName,
+                          variety: item.variety,
+                          farmerName: item.farmerName,
+                          farmerPhone: item.farmerPhone,
+                          location: item.location,
+                          quantityKg: item.maxQuantityKg,
+                          pricePerQuintal: item.pricePerQuintal,
+                          qualityGrade: item.qualityGrade,
+                          isOrganic: item.isOrganic,
+                        });
+                        setOrderQuantityKg(item.quantityKg);
+                      }}
+                      className="text-[11px] font-bold text-[#B8562D] hover:underline cursor-pointer hidden sm:block"
+                    >
+                      Buy Only This Lot →
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Delivery Mandi & Logistics Preferences */}
+          <div className="bg-white rounded-2xl p-4 sm:p-5 border border-[#DCD6C8] shadow-xs space-y-3">
+            <div className="flex items-center gap-2 text-xs font-bold text-[#1A1C18]">
+              <Truck className="w-4 h-4 text-[#B8562D]" />
+              <span>Procurement Delivery Hub & Mandi Logistics</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block text-[11px] font-semibold text-[#1A1C18]/70 mb-1">
+                  Destination APMC Mandi / Warehouse
+                </label>
+                <input
+                  type="text"
+                  value={cartDeliveryMandi}
+                  onChange={(e) => setCartDeliveryMandi(e.target.value)}
+                  placeholder="e.g. Vashi APMC Mandi, Navi Mumbai"
+                  className="w-full py-2.5 px-3 rounded-xl border border-[#DCD6C8] text-xs font-semibold focus:border-[#B8562D] focus:outline-hidden bg-[#FAF8F5]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-[#1A1C18]/70 mb-1">
+                  Packaging & Farm Gate Dispatch Instructions
+                </label>
+                <input
+                  type="text"
+                  value={cartNotes}
+                  onChange={(e) => setCartNotes(e.target.value)}
+                  placeholder="e.g. 50kg standard jute bags, direct truck pickup"
+                  className="w-full py-2.5 px-3 rounded-xl border border-[#DCD6C8] text-xs font-semibold focus:border-[#B8562D] focus:outline-hidden bg-[#FAF8F5]"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Security & Escrow Guarantee */}
+          <div className="bg-[#E2ECD8]/40 border border-[#3F6B3A]/30 rounded-2xl p-3.5 flex items-start gap-3 text-xs">
+            <ShieldCheck className="w-5 h-5 text-[#3F6B3A] shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <strong className="text-[#3F6B3A] block font-bold">100% Krishaka Mandi Escrow Protection Guarantee</strong>
+              <p className="text-[#1A1C18]/75 text-[11px]">
+                Your funds are held securely in the Razorpay Krishaka Escrow Account. The farmer receives payment only after you inspect and accept the produce at your chosen mandi.
+              </p>
+            </div>
+          </div>
+
+        </div>
+
+        {/* Right Section (or Bottom in Drawer): Coupon & Summary Box */}
+        <div className={isDrawer ? "space-y-4 pt-2 border-t border-[#DCD6C8]" : "lg:col-span-4 space-y-4 sticky top-20"}>
+          
+          {/* Coupon Code Section */}
+          <div className="bg-white rounded-2xl p-4 border border-[#DCD6C8] shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-[#1A1C18]">
+                <Tag className="w-3.5 h-3.5 text-[#B8562D]" />
+                <span>Apply Discount Coupon</span>
+              </div>
+              {isFirstBuyer && (
+                <span className="text-[10px] font-bold text-[#3F6B3A] bg-[#E2ECD8] px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <Gift className="w-3 h-3" />
+                  <span>New Buyer Offer</span>
+                </span>
+              )}
+            </div>
+
+            {!isCartCouponApplied ? (
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={cartCouponCode}
+                  onChange={(e) => {
+                    setCartCouponCode(e.target.value.toUpperCase());
+                    setCartCouponError('');
+                  }}
+                  placeholder="Enter coupon (e.g. FIRST250)"
+                  className="flex-1 py-2 px-3 rounded-xl border border-[#DCD6C8] text-xs uppercase font-mono tracking-wider focus:border-[#B8562D] focus:outline-hidden bg-white"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleApplyCartCoupon(cartCouponCode)}
+                  className="px-4 py-2 bg-[#1A1C18] hover:bg-black text-white text-xs font-bold rounded-xl cursor-pointer transition-colors"
+                >
+                  Apply
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between p-2.5 bg-[#E2ECD8] rounded-xl border border-[#3F6B3A]/30 text-xs text-[#3F6B3A] font-semibold">
+                <span className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-[#3F6B3A]" />
+                  <span>Coupon <strong>{cartCouponCode || 'FIRST250'}</strong> active (-₹{cartDiscount})</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={handleRemoveCartCoupon}
+                  className="text-xs text-[#B8562D] font-bold hover:underline cursor-pointer ml-2"
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+
+            {cartCouponError && (
+              <p className="text-[11px] text-red-600 flex items-center gap-1 font-medium bg-red-50 p-2 rounded-lg border border-red-200">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <span>{cartCouponError}</span>
+              </p>
+            )}
+          </div>
+
+          {/* Pricing & Checkout Summary Box */}
+          <div className="bg-[#FAF8F5] rounded-2xl p-5 border border-[#DCD6C8] shadow-xs space-y-4">
+            <h3 className="font-headline font-bold text-base text-[#1A1C18] border-b border-[#DCD6C8] pb-2">
+              Order Procurement Summary
+            </h3>
+
+            <div className="space-y-2 text-xs">
+              <div className="flex justify-between text-[#1A1C18]/80">
+                <span>Total Produce Lots:</span>
+                <strong className="text-[#1A1C18]">{cartItems.length} lots</strong>
+              </div>
+              <div className="flex justify-between text-[#1A1C18]/80">
+                <span>Total Weight:</span>
+                <strong className="text-[#1A1C18] font-mono">
+                  {cartTotalWeightKg.toLocaleString()} kg ({Math.round(cartTotalWeightKg / 100)} Qtl)
+                </strong>
+              </div>
+              <div className="flex justify-between text-[#1A1C18]/80">
+                <span>Produce Subtotal:</span>
+                <span className="font-mono font-bold">₹{cartSubtotal.toLocaleString()}</span>
+              </div>
+              {cartDiscount > 0 && (
+                <div className="flex justify-between text-[#3F6B3A] font-bold">
+                  <span className="flex items-center gap-1">
+                    <Tag className="w-3 h-3" />
+                    <span>First Buyer Discount:</span>
+                  </span>
+                  <span className="font-mono">- ₹{cartDiscount.toLocaleString()}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-[#1A1C18]/70">
+                <span>Escrow Guarantee & Protection:</span>
+                <span className="text-[#3F6B3A] font-bold">FREE (₹0)</span>
+              </div>
+
+              <div className="pt-2 border-t border-[#DCD6C8] flex justify-between items-baseline">
+                <div>
+                  <span className="font-bold text-sm text-[#1A1C18] block">Total Payable:</span>
+                  {cartDiscount > 0 ? (
+                    <span className="text-[11px] text-[#3F6B3A] font-bold">
+                      🎉 You save ₹{cartDiscount} on this cart!
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-[#1A1C18]/60">All taxes & mandi levies inclusive</span>
+                  )}
+                </div>
+                <span className="font-headline font-bold text-2xl text-[#B8562D] font-mono">
+                  ₹{cartFinalTotal.toLocaleString()}
+                </span>
+              </div>
+            </div>
+
+            {/* Direct Purchase Action Buttons */}
+            <div className="space-y-2 pt-2">
+              <button
+                type="button"
+                disabled={isCheckingOut}
+                onClick={() => handleCartPurchaseDirect(true)}
+                className="w-full py-3 bg-[#3F6B3A] hover:bg-[#32562e] text-white font-bold text-xs sm:text-sm rounded-xl shadow-xs flex items-center justify-center gap-2 cursor-pointer transition-all disabled:opacity-60"
+                title="Pay now directly via Razorpay Payment Gateway into Escrow"
+              >
+                <CreditCard className="w-4 h-4" />
+                <span>
+                  {isCheckingOut ? 'Opening Razorpay...' : `Pay Now via Razorpay (₹${cartFinalTotal.toLocaleString()})`}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isCheckingOut}
+                onClick={() => handleCartPurchaseDirect(false)}
+                className="w-full py-2.5 bg-white hover:bg-[#F4F1E8] text-[#1A1C18] border border-[#DCD6C8] font-bold text-xs rounded-xl shadow-2xs cursor-pointer transition-all disabled:opacity-60"
+                title="Submit procurement offers to farmers without immediate payment"
+              >
+                <span>Submit Offers (Pay Later)</span>
+              </button>
+            </div>
+
+            {/* Clear Cart link */}
+            <div className="text-center pt-1">
+              <button
+                type="button"
+                onClick={handleClearCart}
+                className="text-xs text-[#1A1C18]/60 hover:text-red-600 transition-colors font-semibold cursor-pointer"
+              >
+                Clear entire cart
+              </button>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    );
+  };
+
   return (
     <div id="buyer-portal-root" className="min-h-screen bg-[#F4F1E8] text-[#1A1C18] flex flex-col font-body">
       
@@ -381,6 +1114,25 @@ export function BuyerDashboard({
           {/* Action Tools */}
           <div className="flex items-center gap-2">
             
+            {/* Header Shopping Cart Trigger Button */}
+            <button
+              id="buyer-header-cart-btn"
+              type="button"
+              onClick={() => setIsCartDrawerOpen(true)}
+              className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#B8562D] hover:bg-[#9E4823] text-white text-xs font-bold transition-all cursor-pointer shadow-2xs"
+              title="View Procurement Cart & Checkout"
+            >
+              <ShoppingCart className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{t.tabCart || 'Cart'}</span>
+              {cartItems.length > 0 ? (
+                <span className="px-1.5 py-0.2 bg-white text-[#B8562D] text-[10px] font-black rounded-full shadow-xs animate-pulse">
+                  {cartItems.length}
+                </span>
+              ) : (
+                <span className="text-[10px] opacity-75 font-normal">(0)</span>
+              )}
+            </button>
+
             {/* Interactive Language Selector Dropdown */}
             <LanguageSelector
               currentLanguage={language}
@@ -561,6 +1313,24 @@ export function BuyerDashboard({
 
           <button
             type="button"
+            onClick={() => setActiveTab('cart')}
+            className={`flex items-center gap-2 px-4 py-3 border-b-2 font-bold text-sm transition-all whitespace-nowrap cursor-pointer ${
+              activeTab === 'cart'
+                ? 'border-[#B8562D] text-[#B8562D] bg-white/60 rounded-t-xl'
+                : 'border-transparent text-[#1A1C18]/70 hover:text-[#1A1C18]'
+            }`}
+          >
+            <ShoppingCart className="w-4 h-4" />
+            <span>{t.tabCart || 'Procurement Cart'}</span>
+            {cartItems.length > 0 && (
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-[#B8562D] text-white font-bold">
+                {cartItems.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('mandi-rates')}
             className={`flex items-center gap-2 px-4 py-3 border-b-2 font-bold text-sm transition-all whitespace-nowrap cursor-pointer ${
               activeTab === 'mandi-rates'
@@ -715,22 +1485,57 @@ export function BuyerDashboard({
                       </div>
                     </div>
 
-                    <div className="pt-3 border-t border-[#EBE7DC] flex items-center justify-between gap-2">
-                      <div className="truncate">
-                        <span className="text-[10px] text-[#1A1C18]/50 block">Farmer</span>
-                        <span className="text-xs font-bold text-[#1A1C18] truncate block">
-                          {listing.farmerName}
+                    <div className="pt-3 border-t border-[#EBE7DC] space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="truncate">
+                          <span className="text-[10px] text-[#1A1C18]/50 block">Farmer</span>
+                          <span className="text-xs font-bold text-[#1A1C18] truncate block">
+                            {listing.farmerName}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-[#1A1C18]/60 bg-[#F4F1E8] px-2 py-0.5 rounded border border-[#DCD6C8]">
+                          Lot: {listing.quantityKg.toLocaleString()} kg
                         </span>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => handleOpenOrderModal(listing)}
-                        className="flex items-center gap-1 bg-[#B8562D] hover:bg-[#9E4823] text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors cursor-pointer shrink-0 shadow-2xs"
-                      >
-                        <span>Place Offer</span>
-                        <ArrowUpRight className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="grid grid-cols-2 gap-2">
+                        {(() => {
+                          const inCart = cartItems.find((it) => it.id === listing.id);
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => handleAddToCart(listing)}
+                              className={`flex items-center justify-center gap-1 text-xs font-bold py-2 px-2 rounded-lg transition-all cursor-pointer border ${
+                                inCart
+                                  ? 'bg-[#E2ECD8] text-[#3F6B3A] border-[#3F6B3A]/40 hover:bg-[#d5e3cb]'
+                                  : 'bg-[#F4F1E8] hover:bg-[#EBE7DC] text-[#1A1C18] border-[#DCD6C8]'
+                              }`}
+                              title={inCart ? `Already in cart (${inCart.quantityKg.toLocaleString()} kg). Click to add more.` : 'Add lot to Procurement Cart'}
+                            >
+                              {inCart ? (
+                                <>
+                                  <Check className="w-3.5 h-3.5 text-[#3F6B3A] shrink-0" />
+                                  <span className="truncate">In Cart ({inCart.quantityKg}k)</span>
+                                </>
+                              ) : (
+                                <>
+                                  <ShoppingCart className="w-3.5 h-3.5 text-[#B8562D] shrink-0" />
+                                  <span className="truncate">{t.addToCart || 'Add to Cart'}</span>
+                                </>
+                              )}
+                            </button>
+                          );
+                        })()}
+
+                        <button
+                          type="button"
+                          onClick={() => handleOpenOrderModal(listing)}
+                          className="flex items-center justify-center gap-1 bg-[#B8562D] hover:bg-[#9E4823] text-white text-xs font-bold py-2 px-2 rounded-lg transition-colors cursor-pointer shrink-0 shadow-2xs"
+                        >
+                          <span>Place Offer</span>
+                          <ArrowUpRight className="w-3.5 h-3.5 shrink-0" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -843,6 +1648,15 @@ export function BuyerDashboard({
                             <ZoomIn className="w-4 h-4" />
                           </button>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => handleAddWasteToCart(waste)}
+                          className="px-2.5 py-1.5 bg-[#F4F1E8] hover:bg-[#EBE7DC] text-[#1A1C18] border border-[#DCD6C8] rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
+                          title="Add Biomass Lot to Cart"
+                        >
+                          <ShoppingCart className="w-3.5 h-3.5 text-[#8C7A3E]" />
+                          <span>+ Cart</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => showToast(`Direct procurement inquiry sent to farmer ${waste.farmerName} for ${waste.quantityTons} Tons of ${waste.wasteType}!`)}
@@ -1131,7 +1945,127 @@ export function BuyerDashboard({
           </div>
         )}
 
+        {/* TAB 6: PROCUREMENT CART */}
+        {activeTab === 'cart' && (
+          <div className="space-y-6 animate-in fade-in">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="font-headline font-bold text-xl text-[#1A1C18] flex items-center gap-2">
+                  <ShoppingCart className="w-5 h-5 text-[#B8562D]" />
+                  <span>{t.tabCart || 'Procurement Cart & Direct Purchase'}</span>
+                </h2>
+                <p className="text-xs text-[#1A1C18]/70">
+                  Review selected produce lots, adjust lot quantities, and purchase directly with Razorpay Escrow protection.
+                </p>
+              </div>
+
+              {cartItems.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearCart}
+                  className="text-xs text-red-600 hover:text-red-700 font-bold flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Clear Cart ({cartItems.length})</span>
+                </button>
+              )}
+            </div>
+
+            {renderCartContent(false)}
+          </div>
+        )}
+
       </main>
+
+      {/* Sticky Floating Cart Indicator (shown when cart has items and not in cart tab) */}
+      {cartItems.length > 0 && activeTab !== 'cart' && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-[#1A1C18] text-white px-5 py-3 rounded-2xl shadow-2xl border border-[#B8562D] flex items-center justify-between gap-4 sm:gap-6 animate-in slide-in-from-bottom duration-300 max-w-xl w-[92%] sm:w-auto">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#B8562D] flex items-center justify-center text-white shrink-0 shadow-xs relative">
+              <ShoppingCart className="w-5 h-5" />
+              <span className="absolute -top-1 -right-1 w-4 h-4 bg-white text-[#B8562D] text-[10px] font-black rounded-full flex items-center justify-center">
+                {cartItems.length}
+              </span>
+            </div>
+            <div>
+              <div className="text-xs font-bold text-white flex items-center gap-2">
+                <span>{cartItems.length} {cartItems.length === 1 ? 'Lot' : 'Lots'} in Cart</span>
+                <span className="text-[#FFDBD0]">&bull;</span>
+                <span className="font-mono text-[#C0F3B4] font-bold">₹{cartFinalTotal.toLocaleString()}</span>
+              </div>
+              <div className="text-[11px] text-[#F4F1E8]/70">
+                {cartTotalWeightKg.toLocaleString()} kg total produce
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsCartDrawerOpen(true)}
+              className="px-4 py-2 bg-[#B8562D] hover:bg-[#9E4823] text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+            >
+              <span>View Cart & Checkout</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Slide-Over Cart Drawer Modal */}
+      {isCartDrawerOpen && (
+        <div 
+          className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-xs animate-in fade-in"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsCartDrawerOpen(false);
+          }}
+        >
+          <div 
+            className="w-full max-w-xl bg-[#F4F1E8] h-full flex flex-col shadow-2xl border-l border-[#DCD6C8] overflow-hidden animate-in slide-in-from-right duration-300"
+          >
+            {/* Drawer Top Header */}
+            <div className="p-4 bg-[#B8562D] text-white flex items-center justify-between shrink-0 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <ShoppingCart className="w-5 h-5 text-white" />
+                <div>
+                  <h3 className="font-headline font-bold text-lg leading-tight">
+                    Procurement Cart
+                  </h3>
+                  <span className="text-[11px] text-white/80">
+                    {cartItems.length} {cartItems.length === 1 ? 'Lot' : 'Lots'} selected ({cartTotalWeightKg.toLocaleString()} kg)
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {cartItems.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearCart}
+                    className="p-1.5 rounded-lg hover:bg-white/20 text-white/80 hover:text-white cursor-pointer transition-colors"
+                    title="Clear Cart"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setIsCartDrawerOpen(false)}
+                  className="p-1 rounded-lg hover:bg-white/20 text-white cursor-pointer transition-colors"
+                  title="Close Cart"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Drawer Scrollable Content */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {renderCartContent(true)}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Place Purchase Order / Offer */}
       {selectedListingForOrder && (
@@ -1465,17 +2399,30 @@ export function BuyerDashboard({
                 <div className="text-xs text-[#1A1C18]/70">
                   Farmer: <strong>{previewCropImage.farmerName}</strong> • {previewCropImage.location}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const target = previewCropImage;
-                    setPreviewCropImage(null);
-                    handleOpenOrderModal(target);
-                  }}
-                  className="px-4 py-2 bg-[#B8562D] hover:bg-[#9E4823] text-white text-xs font-bold rounded-lg cursor-pointer"
-                >
-                  Place Offer Now
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = previewCropImage;
+                      handleAddToCart(target);
+                    }}
+                    className="px-3.5 py-2 bg-[#F4F1E8] hover:bg-[#EBE7DC] text-[#1A1C18] border border-[#DCD6C8] text-xs font-bold rounded-lg cursor-pointer flex items-center gap-1.5 transition-colors"
+                  >
+                    <ShoppingCart className="w-3.5 h-3.5 text-[#B8562D]" />
+                    <span>Add to Cart</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = previewCropImage;
+                      setPreviewCropImage(null);
+                      handleOpenOrderModal(target);
+                    }}
+                    className="px-4 py-2 bg-[#B8562D] hover:bg-[#9E4823] text-white text-xs font-bold rounded-lg cursor-pointer"
+                  >
+                    Place Offer Now
+                  </button>
+                </div>
               </div>
             </div>
           </div>
