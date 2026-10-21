@@ -80,33 +80,3 @@ export function applyGoogleTranslate(langCode) {
   }
 }
 
-/**
- * Translates a single text or batch of texts using the server-side Google Gemini Translation API
- * @param {string | string[]} input - text or array of texts
- * @param {string} targetLanguage - language code (hi, mr, bn, te, ta, kn, etc.)
- */
-export async function translateWithGoogleApi(input, targetLanguage = 'hi') {
-  try {
-    const isArray = Array.isArray(input);
-    const payload = isArray ? { texts: input, targetLanguage } : { text: input, targetLanguage };
-
-    const response = await fetch('/api/translate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const data = await response.json();
-    if (data.success) {
-      return isArray ? data.translations : data.translation;
-    }
-    return input;
-  } catch (error) {
-    console.warn('Google API translation fallback to original:', error);
-    return input;
-  }
-}

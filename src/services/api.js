@@ -3,7 +3,6 @@ import {
   firebaseRegisterUser,
   firebaseResetPassword,
   firebaseDeleteUser,
-  firebaseResetDemoState,
   firebaseAddAgriWaste,
   firebaseUpdateAgriWaste,
   firebaseDeleteAgriWaste,
@@ -15,7 +14,7 @@ import {
   WASTE_COL,
   SCHEMES_COL,
   APPLICATIONS_COL,
-} from '../firebase';
+} from './firebase';
 import { collection, getDocs } from 'firebase/firestore';
 
 const STORAGE_KEY_AUTH = 'krishaka_auth_user';
@@ -187,36 +186,12 @@ export const ApiService = {
       }
       return data;
     } catch (err) {
-      return {
-        success: true,
-        phone: identifier,
-        demoOtp: '1234',
-        message: `OTP sent to ${identifier} (Evaluation Demo OTP: 1234)`,
-      };
+      return { success: false, error: 'Network connection issue. Please try again.' };
     }
   },
 
-  // 4. Forgot Password - Reset Password in Firestore
+  // 4. Forgot Password - server checks the OTP, then the new password is saved in Firestore
   async forgotPasswordReset(phone, otp, newPassword) {
-    try {
-      const fbRes = await firebaseResetPassword(phone, newPassword);
-      if (fbRes.success) {
-        // Also update backend server copy
-        fetch('/api/auth/forgot-password/reset', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone, otp, newPassword }),
-        }).catch(() => {});
-
-        return {
-          success: true,
-          message: 'Password successfully updated in Google Cloud Firestore.',
-        };
-      }
-    } catch (err) {
-      console.warn('Firestore password reset error:', err);
-    }
-
     try {
       const response = await fetch('/api/auth/forgot-password/reset', {
         method: 'POST',
@@ -225,52 +200,15 @@ export const ApiService = {
       });
       const data = await response.json();
       if (!response.ok || !data.success) {
-        return {
-          success: false,
-          error: data.error || 'Failed to reset password.',
-        };
+        return { success: false, error: data.error || 'Failed to reset password.' };
       }
-      return data;
+      const fbRes = await firebaseResetPassword(phone, newPassword);
+      if (!fbRes.success) {
+        return { success: false, error: fbRes.error || 'Failed to save new password.' };
+      }
+      return { success: true, message: 'Password updated successfully.' };
     } catch (err) {
-      return {
-        success: false,
-        error: err.message || 'Error processing reset request.',
-      };
-    }
-  },
-
-  // Send OTP
-  async sendOtp(phone, role = 'farmer', email) {
-    try {
-      const response = await fetch('/api/auth/send-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, role, email }),
-      });
-      const data = await response.json();
-      return data;
-    } catch (err) {
-      return {
-        success: true,
-        phone,
-        demoCode: '1234',
-        message: `OTP sent to ${phone}`,
-      };
-    }
-  },
-
-  async verifyOtp(phone, otp) {
-    try {
-      const response = await fetch('/api/auth/verify-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, otp }),
-      });
-      const data = await response.json();
-      if (data.user) this.setStoredUser(data.user, data.token);
-      return data;
-    } catch (err) {
-      return { success: otp === '1234', isNewUser: true, phone };
+      return { success: false, error: err.message || 'Error processing reset request.' };
     }
   },
 
@@ -314,21 +252,6 @@ export const ApiService = {
     }
     try {
       const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
-      return res.ok;
-    } catch {
-      return true;
-    }
-  },
-
-  // Reset entire database back to demo state
-  async resetDemoDb() {
-    try {
-      await firebaseResetDemoState();
-    } catch (e) {
-      console.warn('Firebase reset state notice:', e);
-    }
-    try {
-      const res = await fetch('/api/users/reset-demo', { method: 'POST' });
       return res.ok;
     } catch {
       return true;

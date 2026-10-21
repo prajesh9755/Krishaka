@@ -2,18 +2,6 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI } from '@google/genai';
-
-let geminiClient: GoogleGenAI | null = null;
-function getGeminiClient(): GoogleGenAI | null {
-  if (!geminiClient && process.env.GEMINI_API_KEY) {
-    geminiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  }
-  return geminiClient;
-}
-
-// In-memory cache for translated strings to ensure sub-5ms responses
-const translationCache = new Map<string, any>();
 
 interface UserRecord {
   id: string;
@@ -54,55 +42,6 @@ interface UserRecord {
 const DB_DIR = path.join(process.cwd(), '.data');
 const DB_FILE = path.join(DB_DIR, 'krishaka_users.json');
 
-const INITIAL_USERS: UserRecord[] = [
-  {
-    id: 'usr-farmer-1',
-    phone: '+919823456789',
-    email: 'rameshwar.patil@krishaka.in',
-    password: 'Password@123',
-    name: 'Rameshwar Patil',
-    role: 'farmer',
-    language: 'mr',
-    createdAt: '2026-08-10T09:30:00.000Z',
-    updatedAt: '2026-08-20T14:15:00.000Z',
-    isVerified: true,
-    farmerDetails: {
-      village: 'Pimpalgaon Baswant',
-      district: 'Nashik',
-      state: 'Maharashtra',
-      pincode: '422209',
-      landAreaAcres: 7.5,
-      primaryCrops: ['Onion (Red)', 'Tomato', 'Grapes', 'Soybean'],
-      organicCertified: true,
-      aadhaarOrKisanIdVerified: true,
-      kisanCardNumber: 'MH-NSK-2024-8849',
-      bankUpiId: 'rameshwar.farm@upi',
-    },
-  },
-  {
-    id: 'usr-buyer-1',
-    phone: '+919876500000',
-    email: 'trade@bharatagri.com',
-    password: 'Password@123',
-    name: 'Virendra Singhania',
-    role: 'buyer',
-    language: 'en',
-    createdAt: '2026-08-12T11:00:00.000Z',
-    updatedAt: '2026-08-22T16:40:00.000Z',
-    isVerified: true,
-    buyerDetails: {
-      businessName: 'Bharat Fresh Agri-Venture Pvt Ltd',
-      contactPerson: 'Virendra Singhania',
-      businessType: 'wholesaler',
-      apmcGstNumber: '27AAACB2234K1Z9',
-      deliveryCity: 'Vashi APMC, Navi Mumbai',
-      deliveryState: 'Maharashtra',
-      preferredProduce: ['Red Onion', 'Basmati Rice', 'Tomato', 'Soybean'],
-      tradeCapacityTonsMonthly: 120,
-    },
-  },
-];
-
 function loadUsers(): UserRecord[] {
   try {
     if (fs.existsSync(DB_FILE)) {
@@ -112,8 +51,7 @@ function loadUsers(): UserRecord[] {
   } catch (err) {
     console.error('Error reading users DB:', err);
   }
-  saveUsers(INITIAL_USERS);
-  return INITIAL_USERS;
+  return [];
 }
 
 function saveUsers(users: UserRecord[]) {
@@ -162,94 +100,6 @@ async function startServer() {
   // Health check
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', service: 'Krishaka Agri Marketplace API', timestamp: new Date().toISOString() });
-  });
-
-  // Google Gemini Real-Time Translation API Endpoint
-  app.post('/api/translate', async (req, res) => {
-    try {
-      const { text, texts, targetLanguage = 'hi' } = req.body;
-      const target = (targetLanguage || 'hi').toLowerCase();
-
-      const langNames: Record<string, string> = {
-        hi: 'Hindi',
-        mr: 'Marathi',
-        bn: 'Bengali',
-        te: 'Telugu',
-        ta: 'Tamil',
-        kn: 'Kannada',
-        pa: 'Punjabi',
-        gu: 'Gujarati',
-        ml: 'Malayalam',
-        or: 'Odia',
-        en: 'English',
-      };
-
-      const langName = langNames[target] || target;
-
-      // Handle batch array of texts/labels
-      if (texts && Array.isArray(texts)) {
-        const cacheKey = `arr_${target}_${JSON.stringify(texts)}`;
-        if (translationCache.has(cacheKey)) {
-          return res.json({ success: true, translations: translationCache.get(cacheKey), cached: true });
-        }
-
-        const ai = getGeminiClient();
-        if (!ai) {
-          return res.status(503).json({ success: false, error: 'Google AI Translation service unavailable' });
-        }
-
-        const prompt = `You are a real-time translator for an Indian Agricultural Marketplace app named Krishaka.
-Translate the following array of UI labels, options, and agricultural terms into ${langName}.
-Maintain authentic local agricultural terms (Mandi, APMC, Quintal, MSP, Stubble, Bagasse, Kharif/Rabi, etc.).
-Return strictly a valid raw JSON array of strings with the exact same count and order. No markdown or explanation.
-Input: ${JSON.stringify(texts)}`;
-
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-lite',
-          contents: prompt,
-        });
-
-        const raw = (response.text || '').replace(/```json|```/g, '').trim();
-        try {
-          const parsed = JSON.parse(raw);
-          translationCache.set(cacheKey, parsed);
-          return res.json({ success: true, translations: parsed, targetLanguage: target });
-        } catch {
-          return res.json({ success: true, translations: texts, targetLanguage: target, raw });
-        }
-      }
-
-      // Handle single text / term
-      if (text) {
-        const cacheKey = `${target}_${text}`;
-        if (translationCache.has(cacheKey)) {
-          return res.json({ success: true, translation: translationCache.get(cacheKey), cached: true });
-        }
-
-        const ai = getGeminiClient();
-        if (!ai) {
-          return res.status(503).json({ success: false, error: 'Google AI Translation service unavailable' });
-        }
-
-        const prompt = `Translate this text or agricultural term into natural, authentic ${langName} for Indian farmers and mandi traders.
-Keep numbers and currency symbols (like ₹) intact. Return ONLY the translated string without quotes or preamble.
-Text: "${text}"`;
-
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-lite',
-          contents: prompt,
-        });
-
-        const translated = (response.text || text).trim();
-        translationCache.set(cacheKey, translated);
-        return res.json({ success: true, translation: translated, targetLanguage: target });
-      }
-
-      return res.status(400).json({ success: false, error: 'Provide "text" or "texts" array to translate.' });
-    } catch (err: any) {
-      console.error('Translation error in /api/translate:', err);
-      res.status(500).json({ success: false, error: err.message || 'Translation failed' });
-    }
   });
 
   // Active OTP store (identifier -> { code, expiresAt })
@@ -357,24 +207,8 @@ Text: "${text}"`;
       createdAt: existingIndex >= 0 ? users[existingIndex].createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       isVerified: true,
-      farmerDetails: role === 'farmer' ? (farmerDetails || {
-        village: 'Nashik Village',
-        district: 'Nashik',
-        state: 'Maharashtra',
-        pincode: '422209',
-        landAreaAcres: 5,
-        primaryCrops: ['Wheat', 'Onion'],
-        organicCertified: true,
-        aadhaarOrKisanIdVerified: true,
-      }) : undefined,
-      buyerDetails: role === 'buyer' ? (buyerDetails || {
-        businessName: `${name.trim()} Traders`,
-        contactPerson: name.trim(),
-        businessType: 'wholesaler',
-        deliveryCity: 'APMC Market',
-        deliveryState: 'Maharashtra',
-        preferredProduce: ['Red Onion', 'Wheat'],
-      }) : undefined,
+      farmerDetails: role === 'farmer' ? farmerDetails : undefined,
+      buyerDetails: role === 'buyer' ? buyerDetails : undefined,
     };
 
     if (existingIndex >= 0) {
@@ -419,10 +253,10 @@ Text: "${text}"`;
       });
     }
 
-    const demoCode = '1234';
     const generatedCode = String(Math.floor(1000 + Math.random() * 9000));
     const expiresAt = Date.now() + 5 * 60 * 1000;
 
+    console.log(`[OTP] Password reset code for ${user.phone}: ${generatedCode}`);
     activeOtps.set(user.phone, {
       code: generatedCode,
       expiresAt,
@@ -435,8 +269,6 @@ Text: "${text}"`;
       message: `Reset OTP sent successfully to ${user.phone}`,
       phone: user.phone,
       email: user.email,
-      demoCode: generatedCode, // For fast teacher/evaluator verification
-      fallbackTestCode: '1234',
     });
   });
 
@@ -456,11 +288,11 @@ Text: "${text}"`;
     const cleanedPhone = phone.startsWith('+91') ? phone : `+91${phone.replace(/^(\+91|0)/, '').trim()}`;
     const otpSession = activeOtps.get(cleanedPhone);
 
-    const isValid = (otpSession && otpSession.code === otp) || otp === '1234';
+    const isValid = otpSession && otpSession.code === otp && otpSession.expiresAt > Date.now();
     if (!isValid) {
       return res.status(400).json({
         success: false,
-        error: 'Invalid 4-digit OTP. Please check and try again (Test code: 1234).',
+        error: 'Invalid or expired OTP. Please check and try again.',
       });
     }
 
@@ -481,27 +313,6 @@ Text: "${text}"`;
       message: 'Password has been reset successfully! You can now sign in with your new password.',
       user: users[userIndex],
     });
-  });
-
-  // Legacy/Supplementary OTP Endpoints
-  app.post('/api/auth/send-otp', (req, res) => {
-    const { phone } = req.body;
-    const cleanedPhone = phone?.startsWith('+91') ? phone : `+91${(phone || '').replace(/^(\+91|0)/, '').trim()}`;
-    const generatedCode = String(Math.floor(1000 + Math.random() * 9000));
-    activeOtps.set(cleanedPhone, { code: generatedCode, expiresAt: Date.now() + 300000, phone: cleanedPhone });
-    res.json({ success: true, phone: cleanedPhone, demoCode: generatedCode });
-  });
-
-  app.post('/api/auth/verify-otp', (req, res) => {
-    const { phone, otp } = req.body;
-    const cleanedPhone = phone?.startsWith('+91') ? phone : `+91${(phone || '').replace(/^(\+91|0)/, '').trim()}`;
-    const session = activeOtps.get(cleanedPhone);
-    if ((session && session.code === otp) || otp === '1234') {
-      const users = loadUsers();
-      const user = users.find(u => u.phone === cleanedPhone);
-      return res.json({ success: true, isNewUser: !user, user });
-    }
-    res.status(400).json({ success: false, error: 'Invalid OTP' });
   });
 
   // 4. List all users (Database Inspector for Teachers)
@@ -543,12 +354,6 @@ Text: "${text}"`;
     users = users.filter((u) => u.id !== id);
     saveUsers(users);
     res.json({ success: true, message: `User ${id} removed.` });
-  });
-
-  // 7. Reset demo database
-  app.post('/api/users/reset-demo', (req, res) => {
-    saveUsers(INITIAL_USERS);
-    res.json({ success: true, message: 'Database reset to initial sample records.', users: INITIAL_USERS });
   });
 
   // 8. Agri-Waste / Biomass Endpoints

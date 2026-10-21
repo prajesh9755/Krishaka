@@ -13,9 +13,9 @@ import {
   Sparkles,
   AlertCircle
 } from 'lucide-react';
-import { TRANSLATIONS } from '../data/translations';
-import { ApiService } from '../services/api';
-import { getPasswordValidationError } from '../utils/passwordRules';
+import { TRANSLATIONS } from '../../data/translations';
+import { ApiService } from '../../services/api';
+import { getPasswordValidationError } from '../../utils/passwordRules';
 import { PasswordRequirements } from './PasswordRequirements';
 
 
@@ -32,7 +32,6 @@ export function ForgotPasswordModal({
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [demoCode, setDemoCode] = useState('1234');
   const [targetPhone, setTargetPhone] = useState('');
   
   // Timers & Feedback
@@ -84,7 +83,6 @@ export function ForgotPasswordModal({
       const res = await ApiService.forgotPasswordRequestOtp(identifier.trim());
       if (res.success && res.phone) {
         setTargetPhone(res.phone);
-        if (res.demoCode) setDemoCode(res.demoCode);
         setStep('verify_and_new_password');
         setTimer(30);
         setCanResend(false);
@@ -131,7 +129,6 @@ export function ForgotPasswordModal({
     try {
       const res = await ApiService.forgotPasswordRequestOtp(identifier.trim());
       if (res.success) {
-        if (res.demoCode) setDemoCode(res.demoCode);
         setTimer(30);
         setCanResend(false);
       } else {
@@ -234,7 +231,7 @@ export function ForgotPasswordModal({
                     type="text"
                     value={identifier}
                     onChange={(e) => setIdentifier(e.target.value)}
-                    placeholder="e.g. 9823456789 or rameshwar.patil@krishaka.in"
+                    placeholder="Registered mobile number or email"
                     className="w-full py-3 px-3 text-sm text-[#1A1C18] focus:outline-hidden"
                     autoFocus
                   />
@@ -265,17 +262,6 @@ export function ForgotPasswordModal({
               <div className="p-3 bg-[#F4F1E8] rounded-xl border border-[#DCD6C8] text-xs">
                 <span className="text-[#1A1C18]/60 block font-semibold">Verification Code Sent To:</span>
                 <span className="font-bold text-[#3F6B3A] text-sm">{targetPhone}</span>
-              </div>
-
-              {/* Demo OTP Helper */}
-              <div className="flex items-center justify-between p-2.5 bg-[#E2ECD8] border border-[#3F6B3A]/30 rounded-xl text-xs text-[#3F6B3A] font-semibold">
-                <div className="flex items-center gap-1.5">
-                  <Sparkles className="w-4 h-4" />
-                  <span>Evaluation Test OTP:</span>
-                </div>
-                <span className="font-mono font-bold text-sm bg-white px-2 py-0.5 rounded border border-[#3F6B3A]/30">
-                  {demoCode}
-                </span>
               </div>
 
               {/* 4 Digit OTP Inputs */}

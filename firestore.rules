@@ -1,38 +1,8 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Users collection: Accounts, credentials and role profiles
-    match /users/{userId} {
-      allow read, write: if true;
-    }
-
-    // Crop listings: Farmers list crops, buyers inspect
-    match /crop_listings/{listingId} {
-      allow read, write: if true;
-    }
-
-    // Orders and contracts between buyers and farmers
-    match /orders/{orderId} {
-      allow read, write: if true;
-    }
-
-    // APMC Mandi benchmark rates
-    match /mandi_rates/{rateId} {
-      allow read, write: if true;
-    }
-
-    // Agri Waste & Biomass listings
-    match /agri_waste_listings/{wasteId} {
-      allow read, write: if true;
-    }
-
-    // Central & State Government Agricultural Schemes
-    match /govt_schemes/{schemeId} {
-      allow read, write: if true;
-    }
-
-    // Farmer Scheme Applications, DBT Payouts & Claims
-    match /scheme_applications/{applicationId} {
+    // shortcut: open to everyone for the demo, lock down before real use.
+    match /{document=**} {
       allow read, write: if true;
     }
   }

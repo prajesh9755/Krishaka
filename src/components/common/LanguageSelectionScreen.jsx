@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ArrowRight, Sparkles } from 'lucide-react';
-import { LANGUAGES, TRANSLATIONS } from '../data/translations';
-import { applyGoogleTranslate } from '../utils/googleTranslate';
+import { LANGUAGES, TRANSLATIONS } from '../../data/translations';
+import { applyGoogleTranslate } from '../../utils/googleTranslate';
 
 export function LanguageSelectionScreen({
   currentLanguage,
@@ -40,7 +40,7 @@ export function LanguageSelectionScreen({
                 <path d="M12 17c3 0 7-2 7-5-3 0-7 2-7 5z" />
               </svg>
             </div>
-            <span className="font-headline text-3xl font-bold text-[#3F6B3A] tracking-tight">Krishaka</span>
+            <span className="font-headline text-3xl font-bold text-[#3F6B3A] tracking-tight" translate="no">{selected === 'en' ? 'Krishaka' : 'कृषका'}</span>
           </div>
         </div>
 

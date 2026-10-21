@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Globe, ChevronDown, Check, Sparkles } from 'lucide-react';
-import { LANGUAGES } from '../data/translations';
-import { applyGoogleTranslate } from '../utils/googleTranslate';
+import { LANGUAGES } from '../../data/translations';
+import { applyGoogleTranslate } from '../../utils/googleTranslate';
 
 /**
  * Reusable Language Selector Component

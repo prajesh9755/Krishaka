@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { ApiService } from './services/api';
-import { LanguageSelectionScreen } from './components/LanguageSelectionScreen';
-import { LoginScreen } from './components/LoginScreen';
-import { RegistrationScreen } from './components/RegistrationScreen';
-import { FarmerDashboard } from './components/FarmerDashboard';
-import { BuyerDashboard } from './components/BuyerDashboard';
+import { LanguageSelectionScreen } from './components/common/LanguageSelectionScreen';
+import { LoginScreen } from './components/auth/LoginScreen';
+import { RegistrationScreen } from './components/auth/RegistrationScreen';
+import { FarmerDashboard } from './components/dashboard/FarmerDashboard';
+import { BuyerDashboard } from './components/dashboard/BuyerDashboard';
 import { Globe, X, Check, Sparkles } from 'lucide-react';
 import { LANGUAGES } from './data/translations';
 import { applyGoogleTranslate } from './utils/googleTranslate';
-import { subscribeToUsers } from './firebase';
+import { subscribeToUsers } from './services/firebase';
 
 export default function App() {
   const [screen, setScreen] = useState('language');
@@ -16,7 +16,7 @@ export default function App() {
   const [role, setRole] = useState('farmer');
   
   // Auth State
-  const [identifier, setIdentifier] = useState('9823456789');
+  const [identifier, setIdentifier] = useState('');
   
   // Current Authenticated User Profile
   const [currentUser, setCurrentUser] = useState(null);

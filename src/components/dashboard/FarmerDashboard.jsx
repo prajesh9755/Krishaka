@@ -43,15 +43,8 @@ import {
   Percent,
   CheckCircle,
 } from 'lucide-react';
-import { TRANSLATIONS } from '../data/translations';
-import { LanguageSelector } from './LanguageSelector';
-import { 
-  INITIAL_MANDI_RATES, 
-  INITIAL_PRODUCE_LISTINGS, 
-  INITIAL_AGRI_WASTE, 
-  INITIAL_GOVT_SCHEMES, 
-  INITIAL_PURCHASE_ORDERS 
-} from '../data/mockMarketplace';
+import { TRANSLATIONS } from '../../data/translations';
+import { LanguageSelector } from '../common/LanguageSelector';
 import {
   subscribeToCropListings,
   subscribeToOrders,
@@ -67,7 +60,7 @@ import {
   firebaseUpdateAgriWaste,
   firebaseDeleteAgriWaste,
   firebaseSyncMandiRates,
-} from '../firebase';
+} from '../../services/firebase';
 
 export const CROP_PHOTO_PRESETS = [
   { name: 'Red Onion', url: 'https://images.unsplash.com/photo-1618512496248-a07fe83aa8cb?auto=format&fit=crop&w=600&q=80' },
@@ -101,11 +94,11 @@ export function FarmerDashboard({
   onOpenLanguageModal,
 }) {
   const [activeTab, setActiveTab] = useState('produce');
-  const [produceListings, setProduceListings] = useState(INITIAL_PRODUCE_LISTINGS);
-  const [agriWasteListings, setAgriWasteListings] = useState(INITIAL_AGRI_WASTE);
-  const [govtSchemes, setGovtSchemes] = useState(INITIAL_GOVT_SCHEMES);
-  const [orders, setOrders] = useState(INITIAL_PURCHASE_ORDERS);
-  const [mandiRates, setMandiRates] = useState(INITIAL_MANDI_RATES);
+  const [produceListings, setProduceListings] = useState([]);
+  const [agriWasteListings, setAgriWasteListings] = useState([]);
+  const [govtSchemes, setGovtSchemes] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [mandiRates, setMandiRates] = useState([]);
 
   // Real-time Firestore sync
   useEffect(() => {
@@ -122,7 +115,7 @@ export function FarmerDashboard({
       if (Array.isArray(data)) setAgriWasteListings(data);
     });
     const unsubSchemes = subscribeToGovtSchemes((data) => {
-      if (Array.isArray(data) && data.length > 0) setGovtSchemes(data);
+      if (Array.isArray(data)) setGovtSchemes(data);
     });
 
     return () => {
@@ -306,7 +299,7 @@ export function FarmerDashboard({
       farmerId: user.id,
       farmerName: user.name,
       farmerPhone: user.phone,
-      location: user.farmerDetails ? `${user.farmerDetails.village}, ${user.farmerDetails.district}` : 'Nashik, Maharashtra',
+      location: user.farmerDetails ? `${user.farmerDetails.village}, ${user.farmerDetails.district}` : '',
       cropName: cropName.trim(),
       variety: variety.trim() || 'Farm Harvest Fresh Lot',
       quantityKg: Number(quantityKg) || 1000,
@@ -421,8 +414,8 @@ export function FarmerDashboard({
       wasteType,
       quantityTons: Number(wasteQuantityTons) || 10,
       pricePerTon: Number(wastePricePerTon) || 1500,
-      location: user.farmerDetails ? `${user.farmerDetails.village}, ${user.farmerDetails.district}` : 'Nashik, Maharashtra',
-      district: user.farmerDetails?.district || 'Nashik',
+      location: user.farmerDetails ? `${user.farmerDetails.village}, ${user.farmerDetails.district}` : '',
+      district: user.farmerDetails?.district || '',
       moisturePercent: Number(wasteMoisture) || 10,
       suggestedUse: wasteUse,
       dateListed: new Date().toISOString().split('T')[0],
@@ -2224,7 +2217,7 @@ export function FarmerDashboard({
                 <div className="flex justify-between items-center">
                   <span className="text-[#1A1C18]/60">Location</span>
                   <span className="font-bold text-[#1A1C18]">
-                    {user.farmerDetails?.village || 'Nashik'}, {user.farmerDetails?.district || 'Maharashtra'}
+                    {[user.farmerDetails?.village, user.farmerDetails?.district].filter(Boolean).join(', ')}
                   </span>
                 </div>
               </div>

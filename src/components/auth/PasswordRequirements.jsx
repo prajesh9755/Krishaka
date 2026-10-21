@@ -1,6 +1,6 @@
 import React from 'react';
 import { Check, X } from 'lucide-react';
-import { checkPasswordRules } from '../utils/passwordRules';
+import { checkPasswordRules } from '../../utils/passwordRules';
 
 export function PasswordRequirements({ password, className = '' }) {
   const rules = checkPasswordRules(password);

@@ -83,3 +83,8 @@ body {
   pointer-events: none !important;
 }
 
+
+/* Hide Google Translate's top banner and hover popups; translation itself keeps working. */
+.goog-te-banner-frame, iframe.skiptranslate, #goog-gt-tt, .goog-te-balloon-frame { display: none !important; }
+body { top: 0 !important; }
+.goog-text-highlight { background: none !important; box-shadow: none !important; }

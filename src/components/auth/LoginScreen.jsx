@@ -14,9 +14,9 @@ import {
   CheckCircle2,
   Database
 } from 'lucide-react';
-import { TRANSLATIONS } from '../data/translations';
+import { TRANSLATIONS } from '../../data/translations';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
-import { LanguageSelector } from './LanguageSelector';
+import { LanguageSelector } from '../common/LanguageSelector';
 
 export function LoginScreen({
   language,
@@ -85,7 +85,7 @@ export function LoginScreen({
       {/* Top Bar for Language & System info */}
       <header className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between p-4 max-w-5xl mx-auto w-full">
         <div className="flex items-center gap-2">
-          <span className="font-headline font-bold text-xl text-[#3F6B3A]">Krishaka</span>
+          <span className="font-headline font-bold text-xl text-[#3F6B3A]" translate="no">{language === 'en' ? 'Krishaka' : 'कृषका'}</span>
           <span className="text-[11px] font-semibold tracking-wide bg-[#3F6B3A]/10 text-[#3F6B3A] px-2 py-0.5 rounded-full border border-[#3F6B3A]/20 hidden sm:inline-block">
             Agri Marketplace &bull; Login Module
           </span>
@@ -115,7 +115,7 @@ export function LoginScreen({
               <path d="M12 17c3 0 7-2 7-5-3 0-7 2-7 5z" />
             </svg>
           </div>
-          <span className="font-headline text-2xl font-bold text-[#3F6B3A] mt-1 tracking-tight">Krishaka</span>
+          <span className="font-headline text-2xl font-bold text-[#3F6B3A] mt-1 tracking-tight" translate="no">{language === 'en' ? 'Krishaka' : 'कृषका'}</span>
         </div>
 
         {/* Login Card */}
@@ -292,41 +292,6 @@ export function LoginScreen({
                 {t.signUp}
               </button>
             </p>
-          </div>
-
-          {/* Quick-Fill Sample Accounts */}
-          <div className="mt-1 pt-3 border-t border-[#EBE7DC] flex flex-col gap-1.5">
-            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[#3F6B3A]">
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Sample Pre-Registered Accounts:</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                id="demo-farmer-quickfill"
-                type="button"
-                onClick={() => handleQuickFill('farmer', '9823456789', 'Password@123')}
-                className="text-left p-2 rounded-lg bg-[#F4F1E8] hover:bg-[#E2ECD8] border border-[#DCD6C8] text-[11px] font-medium text-[#1A1C18] transition-colors cursor-pointer"
-              >
-                <div className="font-bold text-[#3F6B3A] flex items-center gap-1">
-                  <Tractor className="w-3 h-3" /> Farmer
-                </div>
-                <div className="text-[10px] text-[#1A1C18]/70 truncate">9823456789</div>
-                <div className="text-[9px] text-[#1A1C18]/50 font-mono">Pass: Password@123</div>
-              </button>
-
-              <button
-                id="demo-buyer-quickfill"
-                type="button"
-                onClick={() => handleQuickFill('buyer', '9876500000', 'Password@123')}
-                className="text-left p-2 rounded-lg bg-[#F4F1E8] hover:bg-[#E2ECD8] border border-[#DCD6C8] text-[11px] font-medium text-[#1A1C18] transition-colors cursor-pointer"
-              >
-                <div className="font-bold text-[#B8562D] flex items-center gap-1">
-                  <Store className="w-3 h-3" /> Buyer / Trader
-                </div>
-                <div className="text-[10px] text-[#1A1C18]/70 truncate">9876500000</div>
-                <div className="text-[9px] text-[#1A1C18]/50 font-mono">Pass: Password@123</div>
-              </button>
-            </div>
           </div>
 
         </div>

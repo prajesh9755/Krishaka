@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
-  getFirestore,
+  initializeFirestore,
   collection,
   doc,
   getDoc,
@@ -13,22 +13,23 @@ import {
   query,
   where
 } from 'firebase/firestore';
-import firebaseConfig from '../firebase-applet-config.json';
-import { 
-  INITIAL_MANDI_RATES, 
-  INITIAL_PRODUCE_LISTINGS, 
-  INITIAL_PURCHASE_ORDERS,
-  INITIAL_AGRI_WASTE,
-  INITIAL_GOVT_SCHEMES,
-  INITIAL_SCHEME_APPLICATIONS,
-  INITIAL_LOCAL_RETAILERS,
-} from './data/mockMarketplace';
 
-// 1. Initialize Firebase App
+// 1. Initialize Firebase App (values come from .env, see .env.example)
+const env = import.meta.env;
+const firebaseConfig = {
+  apiKey: env.VITE_FIREBASE_API_KEY,
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: env.VITE_FIREBASE_APP_ID,
+  firestoreDatabaseId: env.VITE_FIREBASE_DATABASE_ID,
+};
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 // 2. Initialize Cloud Firestore with dedicated database instance ID
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId || '(default)');
+// ignoreUndefinedProperties: optional form fields left empty are skipped instead of rejected.
+export const db = initializeFirestore(app, { ignoreUndefinedProperties: true }, firebaseConfig.firestoreDatabaseId || '(default)');
 
 // Collection references
 export const USERS_COL = 'users';
@@ -51,151 +52,6 @@ export const collections = {
   retailers: collection(db, RETAILERS_COL),
 };
 
-// Initial Seed Users for Demo & Evaluation
-const SEED_USERS = [
-  {
-    id: 'usr-farmer-1',
-    phone: '+919823456789',
-    email: 'rameshwar.patil@krishaka.in',
-    password: 'Password@123',
-    name: 'Rameshwar Patil',
-    role: 'farmer',
-    language: 'mr',
-    createdAt: '2026-08-10T09:30:00.000Z',
-    updatedAt: new Date().toISOString(),
-    isVerified: true,
-    farmerDetails: {
-      village: 'Pimpalgaon Baswant',
-      district: 'Nashik',
-      state: 'Maharashtra',
-      pincode: '422209',
-      landAreaAcres: 7.5,
-      primaryCrops: ['Onion (Red)', 'Tomato', 'Grapes', 'Soybean'],
-      organicCertified: true,
-      aadhaarOrKisanIdVerified: true,
-      kisanCardNumber: 'MH-NSK-2024-8849',
-      bankUpiId: 'rameshwar.farm@upi',
-    },
-  },
-  {
-    id: 'usr-buyer-1',
-    phone: '+919876500000',
-    email: 'trade@bharatagri.com',
-    password: 'Password@123',
-    name: 'Virendra Singhania',
-    role: 'buyer',
-    language: 'en',
-    createdAt: '2026-08-12T11:00:00.000Z',
-    updatedAt: new Date().toISOString(),
-    isVerified: true,
-    buyerDetails: {
-      businessName: 'Bharat Fresh Agri-Venture Pvt Ltd',
-      contactPerson: 'Virendra Singhania',
-      businessType: 'wholesaler',
-      apmcGstNumber: '27AAACB2234K1Z9',
-      deliveryCity: 'Vashi APMC, Navi Mumbai',
-      deliveryState: 'Maharashtra',
-      preferredProduce: ['Red Onion', 'Basmati Rice', 'Tomato', 'Soybean'],
-      tradeCapacityTonsMonthly: 120,
-    },
-  },
-];
-
-// Helper: Seed initial database if empty and upload expanded crop catalog
-export async function seedDatabaseIfEmpty() {
-  try {
-    const userSnapshot = await getDocs(collection(db, USERS_COL));
-    if (userSnapshot.empty) {
-      console.log('Seeding initial users into Firestore...');
-      for (const user of SEED_USERS) {
-        await setDoc(doc(db, USERS_COL, user.id), user);
-      }
-    }
-
-    // Check if new crop batch expansion (v2) has been seeded
-    const CROP_BATCH_V2_KEY = 'krishaka_crop_expansion_v2_seeded';
-    const isV2Seeded = typeof window !== 'undefined' && localStorage.getItem(CROP_BATCH_V2_KEY) === 'true';
-
-    const cropSnapshot = await getDocs(collection(db, CROPS_COL));
-    if (cropSnapshot.empty) {
-      console.log('Seeding all initial crop listings into Firestore...');
-      for (const crop of INITIAL_PRODUCE_LISTINGS) {
-        await setDoc(doc(db, CROPS_COL, crop.id), crop);
-      }
-      if (typeof window !== 'undefined') localStorage.setItem(CROP_BATCH_V2_KEY, 'true');
-    } else if (!isV2Seeded) {
-      // First time loading the new crop expansion: upload any new crops (prod-105 to prod-111) that aren't yet in Firestore
-      console.log('Uploading new expanded crops into Firestore...');
-      const existingCropIds = new Set(cropSnapshot.docs.map((d) => d.id));
-      for (const crop of INITIAL_PRODUCE_LISTINGS) {
-        if (!existingCropIds.has(crop.id)) {
-          await setDoc(doc(db, CROPS_COL, crop.id), crop);
-        }
-      }
-      if (typeof window !== 'undefined') localStorage.setItem(CROP_BATCH_V2_KEY, 'true');
-    }
-
-    const orderSnapshot = await getDocs(collection(db, ORDERS_COL));
-    if (orderSnapshot.empty) {
-      console.log('Seeding initial orders into Firestore...');
-      for (const order of INITIAL_PURCHASE_ORDERS) {
-        await setDoc(doc(db, ORDERS_COL, order.id), order);
-      }
-    }
-
-    const mandiSnapshot = await getDocs(collection(db, MANDI_COL));
-    if (mandiSnapshot.empty) {
-      console.log('Seeding initial mandi rates into Firestore...');
-      for (const rate of INITIAL_MANDI_RATES) {
-        await setDoc(doc(db, MANDI_COL, rate.id), rate);
-      }
-    }
-
-    // Always ensure all initial and expanded agri-waste listings exist in Firestore
-    const wasteSnapshot = await getDocs(collection(db, WASTE_COL));
-    const WASTE_BATCH_V2_KEY = 'krishaka_waste_seeded_v2';
-    const isWasteV2Seeded = typeof window !== 'undefined' ? localStorage.getItem(WASTE_BATCH_V2_KEY) : null;
-    if (wasteSnapshot.empty || !isWasteV2Seeded) {
-      console.log('Syncing expanded agri-waste listings to Firestore...');
-      const existingWasteIds = new Set(wasteSnapshot.docs.map((d) => d.id));
-      for (const waste of INITIAL_AGRI_WASTE) {
-        if (!existingWasteIds.has(waste.id)) {
-          await setDoc(doc(db, WASTE_COL, waste.id), waste);
-        }
-      }
-      if (typeof window !== 'undefined') localStorage.setItem(WASTE_BATCH_V2_KEY, 'true');
-    }
-
-    // Always ensure all government schemes exist in Firestore
-    const schemesSnapshot = await getDocs(collection(db, SCHEMES_COL));
-    const SCHEMES_BATCH_KEY = 'krishaka_schemes_seeded_v2';
-    const isSchemesSeeded = typeof window !== 'undefined' ? localStorage.getItem(SCHEMES_BATCH_KEY) : null;
-    if (schemesSnapshot.empty || !isSchemesSeeded) {
-      console.log('Syncing government schemes catalog to Firestore...');
-      for (const scheme of INITIAL_GOVT_SCHEMES) {
-        await setDoc(doc(db, SCHEMES_COL, scheme.id), scheme, { merge: true });
-      }
-      if (typeof window !== 'undefined') localStorage.setItem(SCHEMES_BATCH_KEY, 'true');
-    }
-
-    // Always ensure local retailers exist in Firestore
-    const retailersSnapshot = await getDocs(collection(db, RETAILERS_COL));
-    const RETAILERS_BATCH_KEY = 'krishaka_retailers_seeded_v1';
-    const isRetailersSeeded = typeof window !== 'undefined' ? localStorage.getItem(RETAILERS_BATCH_KEY) : null;
-    if (retailersSnapshot.empty || !isRetailersSeeded) {
-      console.log('Syncing local retailers to Firestore...');
-      for (const ret of INITIAL_LOCAL_RETAILERS) {
-        await setDoc(doc(db, RETAILERS_COL, ret.id), ret, { merge: true });
-      }
-      if (typeof window !== 'undefined') localStorage.setItem(RETAILERS_BATCH_KEY, 'true');
-    }
-  } catch (err) {
-    console.warn('Firebase seeding notice:', err.message);
-  }
-}
-
-// Automatically trigger background seed
-seedDatabaseIfEmpty();
 
 // -------------------------------------------------------------
 // USER CRUD OPERATIONS (Reflects instantly in app)
@@ -655,46 +511,4 @@ export async function firebaseWithdrawApplication(appId) {
   }
 }
 
-// Reset entire database back to default demo state
-export async function firebaseResetDemoState() {
-  try {
-    // 1. Clear users & reseed
-    const uSnap = await getDocs(collection(db, USERS_COL));
-    for (const d of uSnap.docs) await deleteDoc(d.ref);
-    for (const u of SEED_USERS) await setDoc(doc(db, USERS_COL, u.id), u);
 
-    // 2. Clear crops & reseed
-    const cSnap = await getDocs(collection(db, CROPS_COL));
-    for (const d of cSnap.docs) await deleteDoc(d.ref);
-    for (const c of INITIAL_PRODUCE_LISTINGS) await setDoc(doc(db, CROPS_COL, c.id), c);
-
-    // 3. Clear orders & reseed
-    const oSnap = await getDocs(collection(db, ORDERS_COL));
-    for (const d of oSnap.docs) await deleteDoc(d.ref);
-    for (const o of INITIAL_PURCHASE_ORDERS) await setDoc(doc(db, ORDERS_COL, o.id), o);
-
-    // 4. Clear mandi & reseed
-    const mSnap = await getDocs(collection(db, MANDI_COL));
-    for (const d of mSnap.docs) await deleteDoc(d.ref);
-    for (const m of INITIAL_MANDI_RATES) await setDoc(doc(db, MANDI_COL, m.id), m);
-
-    // 5. Clear agri-waste & reseed
-    const wSnap = await getDocs(collection(db, WASTE_COL));
-    for (const d of wSnap.docs) await deleteDoc(d.ref);
-    for (const w of INITIAL_AGRI_WASTE) await setDoc(doc(db, WASTE_COL, w.id), w);
-
-    // 6. Clear schemes & reseed
-    const sSnap = await getDocs(collection(db, SCHEMES_COL));
-    for (const d of sSnap.docs) await deleteDoc(d.ref);
-    for (const s of INITIAL_GOVT_SCHEMES) await setDoc(doc(db, SCHEMES_COL, s.id), s);
-
-    // 7. Clear applications & reseed
-    const aSnap = await getDocs(collection(db, APPLICATIONS_COL));
-    for (const d of aSnap.docs) await deleteDoc(d.ref);
-    for (const a of INITIAL_SCHEME_APPLICATIONS) await setDoc(doc(db, APPLICATIONS_COL, a.id), a);
-
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}

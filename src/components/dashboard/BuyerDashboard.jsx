@@ -32,15 +32,8 @@ import {
   Trash2,
   ZoomIn
 } from 'lucide-react';
-import { TRANSLATIONS } from '../data/translations';
-import { LanguageSelector } from './LanguageSelector';
-import { 
-  INITIAL_MANDI_RATES, 
-  INITIAL_PRODUCE_LISTINGS, 
-  INITIAL_AGRI_WASTE, 
-  INITIAL_PURCHASE_ORDERS, 
-  INITIAL_LOCAL_RETAILERS 
-} from '../data/mockMarketplace';
+import { TRANSLATIONS } from '../../data/translations';
+import { LanguageSelector } from '../common/LanguageSelector';
 import {
   subscribeToCropListings,
   subscribeToOrders,
@@ -50,7 +43,7 @@ import {
   firebaseCreateOrder,
   firebaseDeleteOrder,
   firebaseDeleteUser,
-} from '../firebase';
+} from '../../services/firebase';
 
 export function BuyerDashboard({
   user,
@@ -60,11 +53,11 @@ export function BuyerDashboard({
   onOpenLanguageModal,
 }) {
   const [activeTab, setActiveTab] = useState('marketplace');
-  const [produceListings, setProduceListings] = useState(INITIAL_PRODUCE_LISTINGS);
-  const [agriWasteListings, setAgriWasteListings] = useState(INITIAL_AGRI_WASTE);
-  const [localRetailers, setLocalRetailers] = useState(INITIAL_LOCAL_RETAILERS);
-  const [myOrders, setMyOrders] = useState(INITIAL_PURCHASE_ORDERS);
-  const [mandiRates, setMandiRates] = useState(INITIAL_MANDI_RATES);
+  const [produceListings, setProduceListings] = useState([]);
+  const [agriWasteListings, setAgriWasteListings] = useState([]);
+  const [localRetailers, setLocalRetailers] = useState([]);
+  const [myOrders, setMyOrders] = useState([]);
+  const [mandiRates, setMandiRates] = useState([]);
 
   // Real-time Firestore sync
   useEffect(() => {
@@ -81,7 +74,7 @@ export function BuyerDashboard({
       if (Array.isArray(data)) setAgriWasteListings(data);
     });
     const unsubRetailers = subscribeToRetailers((data) => {
-      if (Array.isArray(data) && data.length > 0) setLocalRetailers(data);
+      if (Array.isArray(data)) setLocalRetailers(data);
     });
 
     return () => {

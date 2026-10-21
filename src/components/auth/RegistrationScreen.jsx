@@ -19,18 +19,12 @@ import {
   User,
   AlertCircle
 } from 'lucide-react';
-import { TRANSLATIONS } from '../data/translations';
-import { getPasswordValidationError } from '../utils/passwordRules';
+import { TRANSLATIONS } from '../../data/translations';
+import { getPasswordValidationError } from '../../utils/passwordRules';
 import { PasswordRequirements } from './PasswordRequirements';
-import { LanguageSelector } from './LanguageSelector';
+import { LanguageSelector } from '../common/LanguageSelector';
+import { STATE_DISTRICTS } from '../../data/locations';
 
-
-const INDIAN_STATES = [
-  'Andhra Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Gujarat', 'Haryana', 
-  'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 
-  'Maharashtra', 'Odisha', 'Punjab', 'Rajasthan', 'Tamil Nadu', 'Telangana', 
-  'Uttar Pradesh', 'Uttarakhand', 'West Bengal'
-];
 
 export function RegistrationScreen({
   language,
@@ -54,7 +48,9 @@ export function RegistrationScreen({
   // Farmer fields
   const [village, setVillage] = useState('');
   const [district, setDistrict] = useState('');
-  const [state, setState] = useState('Maharashtra');
+  const [taluka, setTaluka] = useState('');
+  const [state, setState] = useState('');
+  const districtOptions = STATE_DISTRICTS[state] || [];
   const [pincode, setPincode] = useState('');
   const [landArea, setLandArea] = useState(5);
   const [selectedCrops, setSelectedCrops] = useState(['Wheat', 'Onion']);
@@ -68,7 +64,7 @@ export function RegistrationScreen({
   const [businessType, setBusinessType] = useState('wholesaler');
   const [apmcGstNumber, setApmcGstNumber] = useState('');
   const [deliveryCity, setDeliveryCity] = useState('');
-  const [buyerState, setBuyerState] = useState('Maharashtra');
+  const [buyerState, setBuyerState] = useState('');
   const [preferredProduce, setPreferredProduce] = useState(['Red Onion', 'Wheat', 'Basmati Rice']);
   const [monthlyCapacity, setMonthlyCapacity] = useState(50);
 
@@ -120,7 +116,9 @@ export function RegistrationScreen({
 
     if (role === 'farmer') {
       if (!village.trim()) errors.village = 'Village name is required.';
-      if (!district.trim()) errors.district = 'District is required.';
+      if (!state) errors.state = 'Please select your state.';
+      if (!district) errors.district = 'Please select your district.';
+      if (!taluka.trim()) errors.taluka = 'Taluka is required.';
     } else {
       if (!businessName.trim()) errors.businessName = 'Business or firm name is required.';
       if (!deliveryCity.trim()) errors.deliveryCity = 'Primary delivery city / mandi is required.';
@@ -139,22 +137,23 @@ export function RegistrationScreen({
     if (role === 'farmer') {
       farmerDetails = {
         village: village.trim(),
-        district: district.trim(),
+        taluka: taluka.trim(),
+        district,
         state,
-        pincode: pincode.trim() || '422209',
+        pincode: pincode.trim(),
         landAreaAcres: Number(landArea) || 5,
         primaryCrops: selectedCrops,
         organicCertified: isOrganic,
-        kisanCardNumber: kisanCardNumber.trim() || undefined,
+        kisanCardNumber: kisanCardNumber.trim() || '',
         aadhaarOrKisanIdVerified: true,
-        bankUpiId: bankUpiId.trim() || undefined,
+        bankUpiId: bankUpiId.trim() || '',
       };
     } else {
       buyerDetails = {
         businessName: businessName.trim(),
         contactPerson: contactPerson.trim() || fullName.trim(),
         businessType,
-        apmcGstNumber: apmcGstNumber.trim() || undefined,
+        apmcGstNumber: apmcGstNumber.trim() || '',
         deliveryCity: deliveryCity.trim(),
         deliveryState: buyerState,
         preferredProduce: preferredProduce,
@@ -168,7 +167,7 @@ export function RegistrationScreen({
       password: password,
       role,
       language,
-      email: email.trim() || undefined,
+      email: email.trim() || '',
       farmerDetails,
       buyerDetails,
     };
@@ -193,7 +192,7 @@ export function RegistrationScreen({
           
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
-              <span className="font-headline font-bold text-lg text-[#3F6B3A]">Krishaka</span>
+              <span className="font-headline font-bold text-lg text-[#3F6B3A]" translate="no">{language === 'en' ? 'Krishaka' : 'कृषका'}</span>
               <span className="text-[11px] font-semibold bg-[#3F6B3A]/10 text-[#3F6B3A] px-2 py-0.5 rounded-full border border-[#3F6B3A]/20">
                 Registration
               </span>
@@ -430,7 +429,7 @@ export function RegistrationScreen({
                       type="text"
                       value={village}
                       onChange={(e) => setVillage(e.target.value)}
-                      placeholder="e.g. Niphad, Nashik"
+                      placeholder="Enter your village"
                       className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#3F6B3A] focus:outline-hidden"
                     />
                     {formErrors.village && (
@@ -440,17 +439,17 @@ export function RegistrationScreen({
 
                   <div>
                     <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
-                      {t.district} <span className="text-[#B8562D]">*</span>
+                      Taluka <span className="text-[#B8562D]">*</span>
                     </label>
                     <input
                       type="text"
-                      value={district}
-                      onChange={(e) => setDistrict(e.target.value)}
-                      placeholder="e.g. Nashik"
+                      value={taluka}
+                      onChange={(e) => setTaluka(e.target.value)}
+                      placeholder="Enter your taluka"
                       className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#3F6B3A] focus:outline-hidden"
                     />
-                    {formErrors.district && (
-                      <p className="text-[#B8562D] text-xs mt-1">{formErrors.district}</p>
+                    {formErrors.taluka && (
+                      <p className="text-[#B8562D] text-xs mt-1">{formErrors.taluka}</p>
                     )}
                   </div>
                 </div>
@@ -458,18 +457,45 @@ export function RegistrationScreen({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
-                      {t.state}
+                      {t.state} <span className="text-[#B8562D]">*</span>
                     </label>
                     <select
                       value={state}
-                      onChange={(e) => setState(e.target.value)}
+                      onChange={(e) => { setState(e.target.value); setDistrict(''); }}
                       className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#3F6B3A] focus:outline-hidden"
                     >
-                      {INDIAN_STATES.map((st) => (
+                      <option value="">Select state</option>
+                      {Object.keys(STATE_DISTRICTS).map((st) => (
                         <option key={st} value={st}>{st}</option>
                       ))}
                     </select>
+                    {formErrors.state && (
+                      <p className="text-[#B8562D] text-xs mt-1">{formErrors.state}</p>
+                    )}
                   </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
+                      {t.district} <span className="text-[#B8562D]">*</span>
+                    </label>
+                    <select
+                      value={district}
+                      onChange={(e) => setDistrict(e.target.value)}
+                      disabled={!state}
+                      className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#3F6B3A] focus:outline-hidden disabled:opacity-50"
+                    >
+                      <option value="">{state ? 'Select district' : 'Select state first'}</option>
+                      {districtOptions.map((d) => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                    {formErrors.district && (
+                      <p className="text-[#B8562D] text-xs mt-1">{formErrors.district}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
 
                   <div>
                     <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
