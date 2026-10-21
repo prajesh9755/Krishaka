@@ -30,20 +30,32 @@ import {
   Eye,
   User,
   Trash2,
-  ZoomIn
+  ZoomIn,
+  ShoppingCart,
 } from 'lucide-react';
 import { TRANSLATIONS } from '../../data/translations';
 import { LanguageSelector } from '../common/LanguageSelector';
+import { CartPage } from '../customer/CartPage';
+import { navigate, usePath } from '../../utils/router';
+import { OrderTracker } from '../common/OrderTracker';
+import { ProductPage } from '../common/ProductPage';
+import { CheckoutPage } from '../customer/CheckoutPage';
 import {
   subscribeToCropListings,
   subscribeToOrders,
-  subscribeToMandiRates,
   subscribeToAgriWaste,
   subscribeToRetailers,
+  subscribeToCart,
+  saveCart,
+  placePaidCustomerOrders,
   firebaseCreateOrder,
   firebaseDeleteOrder,
   firebaseDeleteUser,
 } from '../../services/firebase';
+
+// Customer listings are priced per kg, retailer listings per quintal.
+const priceText = (l) => (l.pricePerKg != null ? `₹${l.pricePerKg.toLocaleString()}/kg` : `₹${(l.pricePerQuintal ?? 0).toLocaleString()}/Qtl`);
+const orderPriceText = (o) => (o.offeredPricePerKg != null ? `₹${o.offeredPricePerKg}/kg` : `₹${o.offeredPricePerQuintal}/Qtl`);
 
 export function BuyerDashboard({
   user,
@@ -52,12 +64,49 @@ export function BuyerDashboard({
   onLogout,
   onOpenLanguageModal,
 }) {
-  const [activeTab, setActiveTab] = useState('marketplace');
+  const isCustomer = user.role === 'customer';
+  const location = [user.buyerDetails?.village, user.buyerDetails?.district].filter(Boolean).join(', ');
+  // URL is the source of truth: /app, /app/tab/<tab>, /app/product/<id>, /app/cart, /app/checkout, /app/success
+  const path = usePath();
+  const seg = path.split('/').filter(Boolean);
+  const activeTab = seg[1] === 'tab' && seg[2] ? seg[2] : 'marketplace';
+  const setActiveTab = (tab) => navigate(tab === 'marketplace' ? '/app' : `/app/tab/${tab}`);
+  const page = ['product', 'cart', 'checkout', 'success'].includes(seg[1]) ? seg[1] : 'shop';
+  const productId = page === 'product' ? decodeURIComponent(seg[2] || '') : null;
+  const setPage = (p, opts) => navigate(p === 'shop' ? '/app' : `/app/${p}`, opts);
+  const [lastPayment, setLastPayment] = useState(null);
+  const openProduct = (id) => {
+    navigate(`/app/product/${encodeURIComponent(id)}`);
+    window.scrollTo(0, 0);
+  };
+  const [cart, setCart] = useState([]);
+
+  useEffect(() => (isCustomer ? subscribeToCart(user.id, setCart) : undefined), [isCustomer, user.id]);
+
+  const updateCart = (items) => {
+    setCart(items);
+    saveCart(user.id, items).catch((err) => showToast(`Could not save cart: ${err.message}`));
+  };
+  const addToCart = (listing, qty = 1) => {
+    const existing = cart.find((i) => i.listingId === listing.id);
+    if (existing) {
+      updateCart(cart.map((i) => (i.listingId === listing.id ? { ...i, quantityKg: Math.min(i.quantityKg + qty, i.maxKg) } : i)));
+    } else {
+      updateCart([...cart, {
+        listingId: listing.id, cropName: listing.cropName, variety: listing.variety, imageUrl: listing.imageUrl,
+        farmerId: listing.farmerId, farmerName: listing.farmerName, farmerPhone: listing.farmerPhone, location: listing.location,
+        pricePerKg: listing.pricePerKg, quantityKg: Math.min(qty, listing.quantityKg), maxKg: listing.quantityKg,
+      }]);
+    }
+    showToast(`${qty} kg ${listing.cropName} added to cart`);
+  };
+  const changeCartQty = (listingId, qty) =>
+    updateCart(cart.map((i) => (i.listingId === listingId ? { ...i, quantityKg: Math.max(1, Math.min(qty, i.maxKg)) } : i)));
+  const removeFromCart = (listingId) => updateCart(cart.filter((i) => i.listingId !== listingId));
   const [produceListings, setProduceListings] = useState([]);
   const [agriWasteListings, setAgriWasteListings] = useState([]);
   const [localRetailers, setLocalRetailers] = useState([]);
   const [myOrders, setMyOrders] = useState([]);
-  const [mandiRates, setMandiRates] = useState([]);
 
   // Real-time Firestore sync
   useEffect(() => {
@@ -65,10 +114,7 @@ export function BuyerDashboard({
       if (Array.isArray(data)) setProduceListings(data);
     });
     const unsubOrders = subscribeToOrders((data) => {
-      if (Array.isArray(data)) setMyOrders(data);
-    });
-    const unsubMandi = subscribeToMandiRates((data) => {
-      if (Array.isArray(data)) setMandiRates(data);
+      if (Array.isArray(data)) setMyOrders(data.filter((o) => o.buyerId === user.id));
     });
     const unsubWaste = subscribeToAgriWaste((data) => {
       if (Array.isArray(data)) setAgriWasteListings(data);
@@ -80,7 +126,6 @@ export function BuyerDashboard({
     return () => {
       unsubCrops();
       unsubOrders();
-      unsubMandi();
       unsubWaste();
       unsubRetailers();
     };
@@ -100,7 +145,7 @@ export function BuyerDashboard({
   const [selectedListingForOrder, setSelectedListingForOrder] = useState(null);
   const [orderQuantityKg, setOrderQuantityKg] = useState(1000);
   const [offeredPrice, setOfferedPrice] = useState(2000);
-  const [deliveryMandi, setDeliveryMandi] = useState(user.buyerDetails?.deliveryCity || '');
+  const [deliveryMandi, setDeliveryMandi] = useState(isCustomer ? location : user.buyerDetails?.deliveryCity || '');
   const [orderNotes, setOrderNotes] = useState('');
   const [toastMessage, setToastMessage] = useState('');
 
@@ -121,16 +166,24 @@ export function BuyerDashboard({
 
   const handleOpenOrderModal = (listing) => {
     setSelectedListingForOrder(listing);
-    setOrderQuantityKg(Math.min(2000, listing.quantityKg));
-    setOfferedPrice(listing.pricePerQuintal);
-    setOrderNotes('Require Grade A sorted batch in 50kg standard jute bags.');
+    const perKg = listing.pricePerKg != null;
+    setOrderQuantityKg(Math.min(perKg ? 1 : 2000, listing.quantityKg));
+    setOfferedPrice(perKg ? listing.pricePerKg : listing.pricePerQuintal);
+    setOrderNotes('');
   };
 
   const handlePlaceOrderSubmit = async (e) => {
     e.preventDefault();
     if (!selectedListingForOrder) return;
+    const qtyKg = Number(orderQuantityKg);
+    if (isCustomer) {
+      addToCart(selectedListingForOrder, qtyKg);
+      setSelectedListingForOrder(null);
+      return;
+    }
 
-    const total = Math.round((orderQuantityKg / 100) * offeredPrice);
+    const perKg = selectedListingForOrder.pricePerKg != null;
+    const total = Math.round(perKg ? qtyKg * offeredPrice : (qtyKg / 100) * offeredPrice);
 
     const newOrder = {
       id: `po-${Date.now()}`,
@@ -144,10 +197,12 @@ export function BuyerDashboard({
       buyerId: user.id,
       buyerName: user.name,
       buyerPhone: user.phone,
-      buyerFirm: user.buyerDetails?.businessName || `${user.name} Agro Firm`,
-      quantityKg: orderQuantityKg,
-      quantityQuintals: Math.round(orderQuantityKg / 100),
-      offeredPricePerQuintal: offeredPrice,
+      buyerFirm: user.buyerDetails?.businessName || '',
+      buyerRole: user.role,
+      quantityKg: qtyKg,
+      ...(perKg
+        ? { offeredPricePerKg: offeredPrice }
+        : { quantityQuintals: Math.round(qtyKg / 100), offeredPricePerQuintal: offeredPrice }),
       totalAmount: total,
       status: 'pending',
       orderDate: new Date().toISOString().split('T')[0],
@@ -157,7 +212,7 @@ export function BuyerDashboard({
 
     setMyOrders([newOrder, ...myOrders]);
     setSelectedListingForOrder(null);
-    showToast(`Purchase offer for ${orderQuantityKg}kg of ${selectedListingForOrder.cropName} submitted successfully!`);
+    showToast(`Purchase offer for ${qtyKg}kg of ${selectedListingForOrder.cropName} submitted successfully!`);
 
     try {
       await firebaseCreateOrder(newOrder);
@@ -174,8 +229,9 @@ export function BuyerDashboard({
     const matchesCategory = cropCategoryFilter === 'All' || listing.cropName.toLowerCase().includes(cropCategoryFilter.toLowerCase());
     const matchesOrganic = !organicOnly || listing.isOrganic;
     const matchesGrade = gradeFilter === 'All' || listing.qualityGrade === gradeFilter;
+    const matchesAudience = user.role === 'buyer' || [].concat(listing.audience || 'retailer').includes(user.role);
 
-    return matchesSearch && matchesCategory && matchesOrganic && matchesGrade;
+    return matchesSearch && matchesCategory && matchesOrganic && matchesGrade && matchesAudience;
   });
 
   // Filtered Retailers
@@ -207,11 +263,11 @@ export function BuyerDashboard({
                 </span>
                 <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-[#B8562D]/10 text-[#B8562D] border border-[#B8562D]/30 uppercase tracking-wider flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#B8562D] animate-pulse" />
-                  {t.buyerPortal || 'Buyer & Trader Portal'}
+                  {isCustomer ? 'Customer Portal' : t.buyerPortal || 'Retailer & Trader Portal'}
                 </span>
               </div>
               <p className="text-[11px] text-[#1A1C18]/65 hidden sm:block">
-                {t.buyerTagline || 'Direct Farm Gate Procurement • Local Mandi Network • Verified APMC Contracts'}
+                {isCustomer ? 'Buy fresh produce directly from farmers' : t.buyerTagline || 'Direct Farm Gate Procurement • Local Mandi Network • Verified APMC Contracts'}
               </p>
             </div>
           </div>
@@ -228,6 +284,23 @@ export function BuyerDashboard({
               accentColor="#B8562D"
               id="buyer-header-lang-selector"
             />
+
+            {isCustomer && (
+              <button
+                type="button"
+                onClick={() => setPage('cart')}
+                className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#B8562D] hover:bg-[#9E4823] text-white text-xs font-bold transition-all cursor-pointer"
+                aria-label="Open cart"
+              >
+                <ShoppingCart className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Cart</span>
+                {cart.length > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-[#1A1C18] text-white text-[10px] font-bold min-w-4 h-4 px-1 rounded-full flex items-center justify-center">
+                    {cart.length}
+                  </span>
+                )}
+              </button>
+            )}
 
             {/* Account Profile & Manage */}
             <button
@@ -256,28 +329,6 @@ export function BuyerDashboard({
         </div>
       </header>
 
-      {/* Live Mandi Ticker Bar */}
-      <section className="bg-[#1A1C18] text-white py-2 px-4 overflow-hidden border-b border-[#B8562D]/40">
-        <div className="max-w-7xl mx-auto flex items-center gap-4 text-xs">
-          <div className="flex items-center gap-1.5 text-[#FFDBD0] font-bold shrink-0 bg-white/10 px-2.5 py-0.5 rounded">
-            <TrendingUp className="w-3.5 h-3.5" />
-            <span>{t.mandiLiveRates || 'Mandi Live Rates'}:</span>
-          </div>
-          
-          <div className="flex items-center gap-6 overflow-x-auto whitespace-nowrap scrollbar-none py-0.5">
-            {mandiRates.map((m) => (
-              <div key={m.id} className="flex items-center gap-1.5 text-xs font-medium">
-                <span className="text-[#F4F1E8]/90 font-semibold">{m.commodity}:</span>
-                <span className="font-bold text-white font-mono">₹{m.modalPrice}/Qtl</span>
-                <span className={`text-[10px] font-bold ${m.changePercent >= 0 ? 'text-[#C0F3B4]' : 'text-[#FFDBD0]'}`}>
-                  {m.changePercent >= 0 ? `+${m.changePercent}%` : `${m.changePercent}%`}
-                </span>
-                <span className="text-[10px] text-[#F4F1E8]/50">({m.market})</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
 
       {/* Toast Notification */}
       {toastMessage && (
@@ -288,6 +339,61 @@ export function BuyerDashboard({
       )}
 
       {/* Main Content Area */}
+      {page === 'product' && filteredProduce.some((l) => l.id === productId) ? (() => {
+        const listing = produceListings.find((l) => l.id === productId);
+        return (
+          <ProductPage
+            key={listing.id}
+            listing={listing}
+            mode={isCustomer ? 'customer' : 'retailer'}
+            onPlaceOffer={() => handleOpenOrderModal(listing)}
+            cartQty={cart.find((i) => i.listingId === listing.id)?.quantityKg || 0}
+            moreFromFarmer={filteredProduce.filter((l) => l.farmerId === listing.farmerId && l.id !== listing.id)}
+            onAddToCart={(qty) => addToCart(listing, qty)}
+            onBuyNow={(qty) => {
+              addToCart(listing, qty);
+              setPage('cart');
+            }}
+            onOpenProduct={openProduct}
+            onBack={() => setPage('shop')}
+          />
+        );
+      })() : isCustomer && page === 'checkout' ? (
+        <CheckoutPage
+          user={user}
+          items={cart}
+          defaultAddress={location}
+          onBack={() => setPage('cart')}
+          onPaid={async (details, paymentId) => {
+            await placePaidCustomerOrders(user, cart, details, paymentId);
+            setLastPayment({ paymentId, total: cart.reduce((s, i) => s + i.quantityKg * i.pricePerKg, 0) });
+            setPage('success', { replace: true });
+          }}
+        />
+      ) : isCustomer && page === 'success' && lastPayment ? (
+        <main className="flex-1 max-w-lg w-full mx-auto px-4 py-16 text-center space-y-4">
+          <CheckCircle2 className="w-16 h-16 text-[#3F6B3A] mx-auto" />
+          <h1 className="font-headline font-bold text-2xl text-[#1A1C18]">Payment successful!</h1>
+          <p className="text-sm text-[#1A1C18]/70">
+            ₹{lastPayment.total.toLocaleString()} paid. Your order has been sent to the farmer.
+          </p>
+          <p className="text-xs text-[#1A1C18]/60 font-mono">Payment ID: {lastPayment.paymentId}</p>
+          <div className="flex justify-center gap-2 pt-2">
+            <button type="button" onClick={() => setActiveTab('my-orders')}
+              className="bg-[#B8562D] text-white font-bold text-sm px-5 py-2.5 rounded-xl cursor-pointer">View my orders</button>
+            <button type="button" onClick={() => setPage('shop')}
+              className="border border-[#B8562D] text-[#B8562D] font-bold text-sm px-5 py-2.5 rounded-xl cursor-pointer">Continue shopping</button>
+          </div>
+        </main>
+      ) : isCustomer && page === 'cart' ? (
+        <CartPage
+          items={cart}
+          onChangeQty={changeCartQty}
+          onRemove={removeFromCart}
+          onBack={() => setPage('shop')}
+          onCheckout={() => setPage('checkout')}
+        />
+      ) : (
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 space-y-6">
         
         {/* Buyer Business Profile Card */}
@@ -302,20 +408,24 @@ export function BuyerDashboard({
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h1 className="font-headline text-2xl font-bold text-[#1A1C18]">
-                    {user.buyerDetails?.businessName || `${user.name} Trading Co.`}
+                    {(!isCustomer && user.buyerDetails?.businessName) || user.name}
                   </h1>
                   <span className="flex items-center gap-1 text-xs font-bold text-[#B8562D] bg-[#FCEEE7] px-2.5 py-0.5 rounded-full border border-[#B8562D]/30">
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>{t.verifiedBuyer || 'Verified APMC Buyer'}</span>
+                    <span>{isCustomer ? 'Customer' : t.verifiedBuyer || 'Verified APMC Buyer'}</span>
                   </span>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#1A1C18]/70 mt-1">
                   <span>Contact: <strong className="text-[#1A1C18]">{user.name}</strong> ({user.phone})</span>
-                  {user.buyerDetails && (
+                  {isCustomer ? (
+                    location && <span>&bull; Location: <strong>{location}</strong></span>
+                  ) : user.buyerDetails && (
                     <>
                       <span>&bull; Delivery Hub: <strong>{user.buyerDetails.deliveryCity}</strong></span>
-                      <span>&bull; Business: <strong className="capitalize">{user.buyerDetails.businessType}</strong></span>
+                      {user.buyerDetails.businessType && (
+                        <span>&bull; Business: <strong className="capitalize">{user.buyerDetails.businessType}</strong></span>
+                      )}
                     </>
                   )}
                 </div>
@@ -324,13 +434,17 @@ export function BuyerDashboard({
 
             {/* Procurement Target Banner */}
             <div className="bg-[#F4F1E8] p-3.5 rounded-xl border border-[#DCD6C8] flex items-center gap-4 shrink-0">
-              <div>
-                <span className="text-[10px] uppercase font-bold text-[#1A1C18]/60 block">{t.monthlyTarget || 'Monthly Target'}</span>
-                <span className="font-headline font-bold text-lg text-[#B8562D] font-mono">
-                  {user.buyerDetails?.tradeCapacityTonsMonthly || 50} Tons
-                </span>
-              </div>
-              <div className="h-8 w-px bg-[#DCD6C8]" />
+              {!isCustomer && user.buyerDetails?.tradeCapacityTonsMonthly && (
+                <>
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-[#1A1C18]/60 block">{t.monthlyTarget || 'Monthly Target'}</span>
+                    <span className="font-headline font-bold text-lg text-[#B8562D] font-mono">
+                      {user.buyerDetails.tradeCapacityTonsMonthly} Tons
+                    </span>
+                  </div>
+                  <div className="h-8 w-px bg-[#DCD6C8]" />
+                </>
+              )}
               <div>
                 <span className="text-[10px] uppercase font-bold text-[#1A1C18]/60 block">{t.activeOrders || 'Active Orders'}</span>
                 <span className="font-headline font-bold text-lg text-[#1A1C18] font-mono">
@@ -358,6 +472,7 @@ export function BuyerDashboard({
             <span>{t.tabFarmHarvests || 'Farm Harvest Lots'} ({filteredProduce.length})</span>
           </button>
 
+          {!isCustomer && (
           <button
             type="button"
             onClick={() => setActiveTab('agri-waste')}
@@ -370,7 +485,9 @@ export function BuyerDashboard({
             <Recycle className="w-4 h-4" />
             <span>{t.tabAgriWasteSourcing || 'Agri-Waste & Biomass Sourcing'} ({agriWasteListings.length})</span>
           </button>
+          )}
 
+          {!isCustomer && (
           <button
             type="button"
             onClick={() => setActiveTab('retailers-directory')}
@@ -383,6 +500,7 @@ export function BuyerDashboard({
             <Building className="w-4 h-4" />
             <span>{t.tabRetailersDirectory || 'Local Mandi Retailers Directory'} ({localRetailers.length})</span>
           </button>
+          )}
 
           <button
             type="button"
@@ -394,20 +512,7 @@ export function BuyerDashboard({
             }`}
           >
             <ShoppingBag className="w-4 h-4" />
-            <span>{t.tabMyOrders || 'My Procurement Orders'} ({myOrders.length})</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('mandi-rates')}
-            className={`flex items-center gap-2 px-4 py-3 border-b-2 font-bold text-sm transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === 'mandi-rates'
-                ? 'border-[#B8562D] text-[#B8562D] bg-white/60 rounded-t-xl'
-                : 'border-transparent text-[#1A1C18]/70 hover:text-[#1A1C18]'
-            }`}
-          >
-            <TrendingUp className="w-4 h-4" />
-            <span>{t.tabMspIntel || 'Live MSP Intelligence'}</span>
+            <span>{isCustomer ? 'My Orders' : t.tabMyOrders || 'My Procurement Orders'} ({myOrders.length})</span>
           </button>
 
         </div>
@@ -462,87 +567,117 @@ export function BuyerDashboard({
             </div>
 
             {/* Produce Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-              {filteredProduce.map((listing) => (
-                <div
-                  key={listing.id}
-                  className="bg-white rounded-2xl border border-[#DCD6C8] shadow-xs overflow-hidden flex flex-col hover:border-[#B8562D]/40 transition-all"
-                >
-                  <div className="relative h-44 w-full bg-[#EBE7DC] group">
-                    <img
-                      src={listing.imageUrl}
-                      alt={listing.cropName}
-                      className="w-full h-full object-cover"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setPreviewCropImage(listing)}
-                      className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 text-white text-xs font-bold cursor-pointer"
-                      title="Click to view full photo"
-                    >
-                      <ZoomIn className="w-4 h-4" />
-                      <span>View Photo</span>
-                    </button>
-                    <div className="absolute top-3 left-3 flex gap-1.5">
-                      <span className="bg-[#1A1C18]/85 text-white text-[11px] font-bold px-2 py-0.5 rounded-md">
-                        Grade {listing.qualityGrade}
-                      </span>
-                      {listing.isOrganic && (
-                        <span className="bg-[#3F6B3A] text-white text-[11px] font-bold px-2 py-0.5 rounded-md">
-                          Organic
-                        </span>
-                      )}
+            {(isCustomer
+              ? Object.entries(filteredProduce.reduce((acc, l) => ({ ...acc, [l.farmerId]: [...(acc[l.farmerId] || []), l] }), {}))
+              : [['all', filteredProduce]]
+            ).map(([farmerKey, list]) => (
+              <section key={farmerKey} className="space-y-3">
+                {isCustomer && (
+                  <div className="flex items-center gap-2 border-b border-[#DCD6C8] pb-2">
+                    <div className="w-8 h-8 rounded-full bg-[#3F6B3A] text-white flex items-center justify-center font-bold text-sm">
+                      {list[0].farmerName?.[0] || 'F'}
                     </div>
-                    <div className="absolute bottom-3 right-3 bg-white/95 text-[#1A1C18] font-bold text-xs px-2 py-1 rounded-md shadow-xs">
-                      {listing.quantityKg.toLocaleString()} kg available
+                    <div>
+                      <h3 className="font-headline font-bold text-base text-[#1A1C18]">{list[0].farmerName}</h3>
+                      <p className="text-xs text-[#1A1C18]/60 flex items-center gap-1"><MapPin className="w-3 h-3" /> {list[0].location} · {list.length} products</p>
                     </div>
                   </div>
-
-                  <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
-                    <div>
-                      <div className="flex items-start justify-between gap-1">
-                        <h3 className="font-headline font-bold text-lg text-[#1A1C18]">
-                          {listing.cropName}
-                        </h3>
-                        <div className="text-right">
-                          <span className="text-[10px] text-[#1A1C18]/60 block uppercase font-semibold">Rate</span>
-                          <span className="font-bold text-[#B8562D] text-base font-mono">
-                            ₹{listing.pricePerQuintal.toLocaleString()}/Qtl
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+                  {list.map((listing) => (
+                    <div
+                      key={listing.id}
+                      className="bg-white rounded-2xl border border-[#DCD6C8] shadow-xs overflow-hidden flex flex-col hover:border-[#B8562D]/40 transition-all"
+                    >
+                      <div className="relative h-44 w-full bg-[#EBE7DC] group">
+                        <img
+                          src={listing.imageUrl}
+                          alt={listing.cropName}
+                          className="w-full h-full object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => openProduct(listing.id)}
+                          className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 text-white text-xs font-bold cursor-pointer"
+                          title="View product details"
+                        >
+                          <ZoomIn className="w-4 h-4" />
+                          <span>View Product</span>
+                        </button>
+                        <div className="absolute top-3 left-3 flex gap-1.5">
+                          <span className="bg-[#1A1C18]/85 text-white text-[11px] font-bold px-2 py-0.5 rounded-md">
+                            Grade {listing.qualityGrade}
                           </span>
+                          {listing.isOrganic && (
+                            <span className="bg-[#3F6B3A] text-white text-[11px] font-bold px-2 py-0.5 rounded-md">
+                              Organic
+                            </span>
+                          )}
+                        </div>
+                        <div className="absolute bottom-3 right-3 bg-white/95 text-[#1A1C18] font-bold text-xs px-2 py-1 rounded-md shadow-xs">
+                          {listing.quantityKg.toLocaleString()} kg available
                         </div>
                       </div>
 
-                      <p className="text-xs text-[#1A1C18]/70 font-medium line-clamp-1 mt-0.5">
-                        {listing.variety}
-                      </p>
+                      <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                        <div>
+                          <div className="flex items-start justify-between gap-1">
+                            <h3
+                              className="font-headline font-bold text-lg text-[#1A1C18] cursor-pointer hover:text-[#B8562D]"
+                              onClick={() => openProduct(listing.id)}
+                            >
+                              {listing.cropName}
+                            </h3>
+                            <div className="text-right">
+                              <span className="text-[10px] text-[#1A1C18]/60 block uppercase font-semibold">Rate</span>
+                              <span className="font-bold text-[#B8562D] text-base font-mono">
+                                {priceText(listing)}
+                              </span>
+                            </div>
+                          </div>
 
-                      <div className="flex items-center gap-1 text-xs text-[#1A1C18]/60 mt-2">
-                        <MapPin className="w-3.5 h-3.5 text-[#B8562D] shrink-0" />
-                        <span className="truncate">{listing.location}</span>
+                          <p className="text-xs text-[#1A1C18]/70 font-medium line-clamp-1 mt-0.5">
+                            {listing.variety}
+                          </p>
+
+                          <div className="flex items-center gap-1 text-xs text-[#1A1C18]/60 mt-2">
+                            <MapPin className="w-3.5 h-3.5 text-[#B8562D] shrink-0" />
+                            <span className="truncate">{listing.location}</span>
+                          </div>
+                        </div>
+
+                        <div className="pt-3 border-t border-[#EBE7DC] flex items-center justify-between gap-2">
+                          <div className="truncate">
+                            <span className="text-[10px] text-[#1A1C18]/50 block">Farmer</span>
+                            <span className="text-xs font-bold text-[#1A1C18] truncate block">
+                              {listing.farmerName}
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleOpenOrderModal(listing)}
+                            className="flex items-center gap-1 bg-[#B8562D] hover:bg-[#9E4823] text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors cursor-pointer shrink-0 shadow-2xs"
+                          >
+                            {isCustomer ? (
+                              <>
+                                <ShoppingCart className="w-3.5 h-3.5" />
+                                <span>Add to Cart</span>
+                              </>
+                            ) : (
+                              <>
+                                <span>Place Offer</span>
+                                <ArrowUpRight className="w-3.5 h-3.5" />
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
                     </div>
-
-                    <div className="pt-3 border-t border-[#EBE7DC] flex items-center justify-between gap-2">
-                      <div className="truncate">
-                        <span className="text-[10px] text-[#1A1C18]/50 block">Farmer</span>
-                        <span className="text-xs font-bold text-[#1A1C18] truncate block">
-                          {listing.farmerName}
-                        </span>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleOpenOrderModal(listing)}
-                        className="flex items-center gap-1 bg-[#B8562D] hover:bg-[#9E4823] text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors cursor-pointer shrink-0 shadow-2xs"
-                      >
-                        <span>Place Offer</span>
-                        <ArrowUpRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </section>
+            ))}
 
           </div>
         )}
@@ -773,10 +908,10 @@ export function BuyerDashboard({
             <div>
               <h2 className="font-headline font-bold text-xl text-[#1A1C18] flex items-center gap-2">
                 <ShoppingBag className="w-5 h-5 text-[#B8562D]" />
-                <span>My Procurement Contracts & Bids</span>
+                <span>{isCustomer ? 'My Orders' : 'My Procurement Contracts & Bids'}</span>
               </h2>
               <p className="text-xs text-[#1A1C18]/70">
-                Track status of submitted purchase offers, farmer confirmations, and dispatched farm deliveries.
+                {isCustomer ? 'Track your orders and their delivery status.' : 'Track status of submitted purchase offers, farmer confirmations, and dispatched farm deliveries.'}
               </p>
             </div>
 
@@ -784,8 +919,9 @@ export function BuyerDashboard({
               {myOrders.map((order) => (
                 <div
                   key={order.id}
-                  className="bg-white rounded-2xl p-5 border border-[#DCD6C8] shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4"
+                  className="bg-white rounded-2xl p-5 border border-[#DCD6C8] shadow-xs space-y-4"
                 >
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-xs font-mono font-bold bg-[#F4F1E8] px-2 py-0.5 rounded border border-[#DCD6C8]">
@@ -826,7 +962,7 @@ export function BuyerDashboard({
                         ₹{order.totalAmount.toLocaleString()}
                       </div>
                       <div className="text-[11px] text-[#1A1C18]/70">
-                        {order.quantityKg} kg @ ₹{order.offeredPricePerQuintal}/Qtl
+                        {order.quantityKg} kg @ {orderPriceText(order)}
                       </div>
                     </div>
 
@@ -839,63 +975,15 @@ export function BuyerDashboard({
                     </a>
                   </div>
                 </div>
+                <OrderTracker order={order} />
+                </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* TAB 5: MANDI PRICE BENCHMARK */}
-        {activeTab === 'mandi-rates' && (
-          <div className="space-y-6">
-            <div>
-              <h2 className="font-headline font-bold text-xl text-[#1A1C18]">
-                APMC National Mandi Modal Benchmarks (₹ / Quintal)
-              </h2>
-              <p className="text-xs text-[#1A1C18]/70">
-                Official price trends from key markets to assist in transparent price negotiations with farmers.
-              </p>
-            </div>
-
-            <div className="bg-white rounded-2xl border border-[#DCD6C8] shadow-xs overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-[#F4F1E8] border-b border-[#DCD6C8] font-bold text-[#1A1C18] uppercase tracking-wider">
-                    <tr>
-                      <th className="py-3 px-4">Commodity</th>
-                      <th className="py-3 px-4">Mandi & State</th>
-                      <th className="py-3 px-4">Min Price</th>
-                      <th className="py-3 px-4">Max Price</th>
-                      <th className="py-3 px-4">Modal Price</th>
-                      <th className="py-3 px-4">Daily Trend</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#EBE7DC]">
-                    {mandiRates.map((rate) => (
-                      <tr key={rate.id} className="hover:bg-[#F4F1E8]/50 transition-colors">
-                        <td className="py-3.5 px-4 font-bold text-[#1A1C18]">{rate.commodity}</td>
-                        <td className="py-3.5 px-4 text-[#1A1C18]/80">{rate.market}, {rate.state}</td>
-                        <td className="py-3.5 px-4 font-mono">₹{rate.minPrice}</td>
-                        <td className="py-3.5 px-4 font-mono">₹{rate.maxPrice}</td>
-                        <td className="py-3.5 px-4 font-mono font-bold text-[#B8562D] text-sm">₹{rate.modalPrice}</td>
-                        <td className="py-3.5 px-4">
-                          <span
-                            className={`inline-flex items-center gap-1 font-bold px-2 py-0.5 rounded text-[11px] ${
-                              rate.changePercent >= 0 ? 'bg-[#E2ECD8] text-[#3F6B3A]' : 'bg-[#FFDBD0] text-[#B8562D]'
-                            }`}
-                          >
-                            {rate.changePercent >= 0 ? `+${rate.changePercent}%` : `${rate.changePercent}%`}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
       </main>
+      )}
 
       {/* Modal: Place Purchase Order / Offer */}
       {selectedListingForOrder && (
@@ -905,7 +993,7 @@ export function BuyerDashboard({
               <div className="flex items-center gap-2">
                 <ShoppingBag className="w-5 h-5" />
                 <h3 className="font-headline font-bold text-lg">
-                  Place Procurement Offer: {selectedListingForOrder.cropName}
+                  {isCustomer ? 'Add to Cart' : 'Place Procurement Offer'}: {selectedListingForOrder.cropName}
                 </h3>
               </div>
               <button
@@ -932,8 +1020,8 @@ export function BuyerDashboard({
                   <span>{selectedListingForOrder.quantityKg.toLocaleString()} kg</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#1A1C18]/70">Farmer Ask Price:</span>
-                  <span className="font-bold text-[#3F6B3A]">₹{selectedListingForOrder.pricePerQuintal}/Qtl</span>
+                  <span className="text-[#1A1C18]/70">{isCustomer ? 'Price:' : 'Farmer Ask Price:'}</span>
+                  <span className="font-bold text-[#3F6B3A]">{priceText(selectedListingForOrder)}</span>
                 </div>
               </div>
 
@@ -944,14 +1032,23 @@ export function BuyerDashboard({
                   </label>
                   <input
                     type="number"
-                    min="100"
+                    min={isCustomer ? 1 : 100}
                     max={selectedListingForOrder.quantityKg}
                     value={orderQuantityKg}
-                    onChange={(e) => setOrderQuantityKg(parseInt(e.target.value) || 100)}
+                    onChange={(e) => setOrderQuantityKg(e.target.value)} // kept as typed; the browser checks min/max on submit
+                    required
                     className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm focus:border-[#B8562D] focus:outline-hidden"
                   />
                 </div>
 
+                {isCustomer ? (
+                  <div>
+                    <label className="block text-xs font-semibold text-[#1A1C18] mb-1">Price</label>
+                    <div className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm bg-[#F4F1E8] font-bold">
+                      {priceText(selectedListingForOrder)}
+                    </div>
+                  </div>
+                ) : (
                 <div>
                   <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
                     Offered Price (₹/Quintal)
@@ -964,40 +1061,45 @@ export function BuyerDashboard({
                     className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm focus:border-[#B8562D] focus:outline-hidden"
                   />
                 </div>
+                )}
               </div>
 
+              {!isCustomer && (
+              <>
               <div>
                 <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
-                  Delivery Destination / APMC Mandi
+                  {isCustomer ? 'Delivery Address' : 'Delivery Destination / APMC Mandi'}
                 </label>
                 <input
                   type="text"
                   required
                   value={deliveryMandi}
                   onChange={(e) => setDeliveryMandi(e.target.value)}
-                  placeholder="e.g. Vashi APMC Mandi, Navi Mumbai"
+                  placeholder={isCustomer ? 'House, street, village / city' : 'APMC mandi or warehouse'}
                   className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm focus:border-[#B8562D] focus:outline-hidden"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
-                  Packaging & Logistics Note
+                  {isCustomer ? 'Note for farmer (optional)' : 'Packaging & Logistics Note'}
                 </label>
                 <textarea
                   rows={2}
                   value={orderNotes}
                   onChange={(e) => setOrderNotes(e.target.value)}
-                  placeholder="e.g. Jute bag packaging, direct farm truck pickup requested"
+                  placeholder={isCustomer ? 'e.g. Deliver in the morning' : 'e.g. Jute bag packaging, direct farm truck pickup requested'}
                   className="w-full py-2 px-3 rounded-lg border border-[#DCD6C8] text-xs focus:border-[#B8562D] focus:outline-hidden"
                 />
               </div>
+              </>
+              )}
 
               {/* Deal Total Calculation */}
               <div className="p-3 bg-[#FCEEE7] rounded-xl border border-[#B8562D]/30 flex items-center justify-between">
-                <span className="text-xs font-bold text-[#1A1C18]">Calculated Offer Total:</span>
+                <span className="text-xs font-bold text-[#1A1C18]">{isCustomer ? 'Total:' : 'Calculated Offer Total:'}</span>
                 <span className="font-headline font-bold text-lg text-[#B8562D] font-mono">
-                  ₹{Math.round((orderQuantityKg / 100) * offeredPrice).toLocaleString()}
+                  ₹{Math.round(selectedListingForOrder.pricePerKg != null ? Number(orderQuantityKg) * offeredPrice : (Number(orderQuantityKg) / 100) * offeredPrice).toLocaleString()}
                 </span>
               </div>
 
@@ -1013,7 +1115,7 @@ export function BuyerDashboard({
                   type="submit"
                   className="px-5 py-2 text-xs font-bold bg-[#B8562D] hover:bg-[#9E4823] text-white rounded-lg shadow-2xs cursor-pointer"
                 >
-                  Dispatch Purchase Offer
+                  {isCustomer ? 'Add to Cart' : 'Dispatch Purchase Offer'}
                 </button>
               </div>
             </form>
@@ -1052,7 +1154,7 @@ export function BuyerDashboard({
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                 <div className="p-2.5 bg-[#F4F1E8] rounded-xl border border-[#DCD6C8]">
                   <span className="text-[#1A1C18]/60 block text-[10px]">Asking Rate</span>
-                  <strong className="text-sm font-bold text-[#B8562D]">₹{previewCropImage.pricePerQuintal}/Qtl</strong>
+                  <strong className="text-sm font-bold text-[#B8562D]">{priceText(previewCropImage)}</strong>
                 </div>
                 <div className="p-2.5 bg-[#F4F1E8] rounded-xl border border-[#DCD6C8]">
                   <span className="text-[#1A1C18]/60 block text-[10px]">Available</span>
@@ -1162,7 +1264,7 @@ export function BuyerDashboard({
             <div className="p-4 bg-[#B8562D] text-white flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <User className="w-5 h-5" />
-                <h3 className="font-headline font-bold text-lg">Buyer Account Profile</h3>
+                <h3 className="font-headline font-bold text-lg">{isCustomer ? 'My Account' : 'Retailer Account Profile'}</h3>
               </div>
               <button
                 type="button"
@@ -1176,13 +1278,15 @@ export function BuyerDashboard({
             <div className="p-5 space-y-4 text-xs">
               <div className="bg-[#F4F1E8] p-3.5 rounded-xl border border-[#DCD6C8] space-y-2">
                 <div className="flex justify-between items-center pb-2 border-b border-[#DCD6C8]">
-                  <span className="text-[#1A1C18]/60">Representative</span>
+                  <span className="text-[#1A1C18]/60">{isCustomer ? 'Name' : 'Representative'}</span>
                   <span className="font-bold text-[#1A1C18] text-sm">{user.name}</span>
                 </div>
-                <div className="flex justify-between items-center pb-2 border-b border-[#DCD6C8]">
-                  <span className="text-[#1A1C18]/60">Firm Name</span>
-                  <span className="font-bold text-[#1A1C18]">{user.buyerDetails?.businessName || 'Agro Wholesale'}</span>
-                </div>
+                {!isCustomer && (
+                  <div className="flex justify-between items-center pb-2 border-b border-[#DCD6C8]">
+                    <span className="text-[#1A1C18]/60">Firm Name</span>
+                    <span className="font-bold text-[#1A1C18]">{user.buyerDetails?.businessName}</span>
+                  </div>
+                )}
                 <div className="flex justify-between items-center pb-2 border-b border-[#DCD6C8]">
                   <span className="text-[#1A1C18]/60">Phone Number</span>
                   <span className="font-mono font-bold text-[#1A1C18]">{user.phone}</span>
@@ -1194,9 +1298,9 @@ export function BuyerDashboard({
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-[#1A1C18]/60">Delivery Hub</span>
+                  <span className="text-[#1A1C18]/60">{isCustomer ? 'Location' : 'Delivery Hub'}</span>
                   <span className="font-bold text-[#1A1C18]">
-                    {user.buyerDetails?.deliveryCity}
+                    {isCustomer ? location : user.buyerDetails?.deliveryCity}
                   </span>
                 </div>
               </div>

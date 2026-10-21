@@ -15,7 +15,6 @@ import {
   Database
 } from 'lucide-react';
 import { TRANSLATIONS } from '../../data/translations';
-import { ForgotPasswordModal } from './ForgotPasswordModal';
 import { LanguageSelector } from '../common/LanguageSelector';
 
 export function LoginScreen({
@@ -36,7 +35,6 @@ export function LoginScreen({
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [fieldError, setFieldError] = useState('');
-  const [isForgotModalOpen, setIsForgotModalOpen] = useState(false);
   const [localSuccess, setLocalSuccess] = useState(successMessage || '');
 
   const t = TRANSLATIONS[language] || TRANSLATIONS.en;
@@ -211,14 +209,6 @@ export function LoginScreen({
                 <label htmlFor="login-password" className="text-xs font-semibold text-[#1A1C18] uppercase tracking-wider">
                   {t.password}
                 </label>
-                <button
-                  id="forgot-password-link"
-                  type="button"
-                  onClick={() => setIsForgotModalOpen(true)}
-                  className="text-xs font-bold text-[#B8562D] hover:underline cursor-pointer"
-                >
-                  {t.forgotPassword}
-                </button>
               </div>
               <div className="flex rounded-lg border border-[#DCD6C8] focus-within:border-[#3F6B3A] focus-within:ring-2 focus-within:ring-[#3F6B3A]/20 overflow-hidden bg-white">
                 <div className="flex items-center px-3 bg-[#F4F1E8] border-r border-[#DCD6C8] text-[#1A1C18]/70">
@@ -302,18 +292,6 @@ export function LoginScreen({
           <span>Role-Based Authentication &bull; JSON Encrypted Storage</span>
         </div>
       </main>
-
-      {/* Forgot Password Recovery Modal */}
-      <ForgotPasswordModal
-        isOpen={isForgotModalOpen}
-        onClose={() => setIsForgotModalOpen(false)}
-        language={language}
-        initialIdentifier={localId}
-        onSuccessReset={(msg) => {
-          setLocalSuccess(msg);
-          setIsForgotModalOpen(false);
-        }}
-      />
 
     </div>
   );

@@ -1,8 +1,6 @@
 import {
   firebaseLoginUser,
   firebaseRegisterUser,
-  firebaseResetPassword,
-  firebaseDeleteUser,
   firebaseAddAgriWaste,
   firebaseUpdateAgriWaste,
   firebaseDeleteAgriWaste,
@@ -10,7 +8,6 @@ import {
   firebaseUpdateApplicationStatus,
   firebaseWithdrawApplication,
   db,
-  USERS_COL,
   WASTE_COL,
   SCHEMES_COL,
   APPLICATIONS_COL,
@@ -61,200 +58,33 @@ export const ApiService = {
     }
   },
 
-  // 1. Password Login via Firebase Firestore
+  // Login: checked against the Firestore users collection
   async login(payload) {
     try {
-      // Direct Cloud Firestore Authentication verification
-      const fbResult = await firebaseLoginUser(payload.identifier, payload.password);
-      if (fbResult.success && fbResult.user) {
+      const res = await firebaseLoginUser(payload.identifier, payload.password);
+      if (res.success && res.user) {
         const token = `fb-token-${Date.now()}`;
-        this.setStoredUser(fbResult.user, token);
-        return {
-          success: true,
-          user: fbResult.user,
-          token,
-          source: 'Google Cloud Firestore',
-        };
-      } else if (fbResult.error) {
-        return {
-          success: false,
-          error: fbResult.error,
-        };
+        this.setStoredUser(res.user, token);
+        return { success: true, user: res.user, token };
       }
+      return { success: false, error: res.error || 'Login failed. Please check your credentials.' };
     } catch (err) {
-      console.warn('Firebase login attempt failed, trying backend proxy:', err);
-    }
-
-    // Secondary fallback to server endpoint
-    try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        return {
-          success: false,
-          error: data.error || 'Login failed. Please check your credentials.',
-        };
-      }
-      if (data.user) {
-        this.setStoredUser(data.user, data.token);
-      }
-      return data;
-    } catch (err) {
-      console.warn('Login network fallback:', err);
-      return {
-        success: false,
-        error: 'Network connection issue. Please check your internet connection.',
-      };
+      return { success: false, error: 'Network connection issue. Please check your internet connection.' };
     }
   },
 
-  // 2. Register (Sign Up) via Firebase Firestore
+  // Sign up: creates the user document in Firestore
   async register(payload) {
     try {
-      const fbResult = await firebaseRegisterUser(payload);
-      if (fbResult.success && fbResult.user) {
+      const res = await firebaseRegisterUser(payload);
+      if (res.success && res.user) {
         const token = `fb-token-${Date.now()}`;
-        this.setStoredUser(fbResult.user, token);
-        // Also sync with server in background
-        fetch('/api/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }).catch(() => {});
-
-        return {
-          success: true,
-          user: fbResult.user,
-          token,
-          source: 'Google Cloud Firestore',
-        };
-      } else if (fbResult.error) {
-        return {
-          success: false,
-          error: fbResult.error,
-        };
+        this.setStoredUser(res.user, token);
+        return { success: true, user: res.user, token };
       }
+      return { success: false, error: res.error || 'Failed to complete registration.' };
     } catch (err) {
-      console.warn('Firebase registration failed, trying server fallback:', err);
-    }
-
-    // Secondary fallback to server endpoint
-    try {
-      const response = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        return {
-          success: false,
-          error: data.error || 'Failed to complete registration.',
-        };
-      }
-      if (data.user) {
-        this.setStoredUser(data.user, data.token);
-      }
-      return data;
-    } catch (err) {
-      console.warn('API register error fallback:', err.message);
-      return {
-        success: false,
-        error: 'Unable to connect to database. Please check your connection.',
-      };
-    }
-  },
-
-  // 3. Forgot Password - Request OTP
-  async forgotPasswordRequestOtp(identifier) {
-    try {
-      const response = await fetch('/api/auth/forgot-password/request-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier }),
-      });
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        return {
-          success: false,
-          error: data.error || 'No registered account found with these details.',
-        };
-      }
-      return data;
-    } catch (err) {
-      return { success: false, error: 'Network connection issue. Please try again.' };
-    }
-  },
-
-  // 4. Forgot Password - server checks the OTP, then the new password is saved in Firestore
-  async forgotPasswordReset(phone, otp, newPassword) {
-    try {
-      const response = await fetch('/api/auth/forgot-password/reset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, otp, newPassword }),
-      });
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        return { success: false, error: data.error || 'Failed to reset password.' };
-      }
-      const fbRes = await firebaseResetPassword(phone, newPassword);
-      if (!fbRes.success) {
-        return { success: false, error: fbRes.error || 'Failed to save new password.' };
-      }
-      return { success: true, message: 'Password updated successfully.' };
-    } catch (err) {
-      return { success: false, error: err.message || 'Error processing reset request.' };
-    }
-  },
-
-  // Get all users directly from Cloud Firestore
-  async getAllUsers() {
-    try {
-      const snap = await getDocs(collection(db, USERS_COL));
-      const users = snap.docs.map((d) => ({ ...d.data(), id: d.id }));
-      if (users.length > 0) {
-        return {
-          users,
-          totalUsers: users.length,
-          databaseStorageType: 'Google Cloud Firestore',
-          connected: true,
-        };
-      }
-    } catch (err) {
-      console.warn('Firestore fetch users failed, fallback to server:', err);
-    }
-
-    try {
-      const response = await fetch('/api/users');
-      const data = await response.json();
-      return data;
-    } catch (err) {
-      const local = this.getStoredUser();
-      return {
-        users: local ? [local] : [],
-        totalUsers: local ? 1 : 0,
-        databaseStorageType: 'Local Client Store',
-      };
-    }
-  },
-
-  // Delete User in Firestore
-  async deleteUser(id) {
-    try {
-      await firebaseDeleteUser(id);
-    } catch (e) {
-      console.warn('Firestore user delete notice:', e);
-    }
-    try {
-      const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
-      return res.ok;
-    } catch {
-      return true;
+      return { success: false, error: 'Unable to connect to database. Please check your connection.' };
     }
   },
 

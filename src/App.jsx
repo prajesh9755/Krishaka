@@ -9,9 +9,15 @@ import { Globe, X, Check, Sparkles } from 'lucide-react';
 import { LANGUAGES } from './data/translations';
 import { applyGoogleTranslate } from './utils/googleTranslate';
 import { subscribeToUsers } from './services/firebase';
+import { navigate, usePath } from './utils/router';
+
+const SCREEN_PATHS = { language: '/', login: '/login', register: '/register', dashboard: '/app' };
 
 export default function App() {
-  const [screen, setScreen] = useState('language');
+  const path = usePath();
+  const screen = path.startsWith('/app') ? 'dashboard' : path === '/login' ? 'login' : path === '/register' ? 'register' : 'language';
+  // Entering the dashboard or logging out replaces history, so Back never jumps between logged-in and logged-out screens.
+  const setScreen = (s) => navigate(SCREEN_PATHS[s], { replace: s === 'dashboard' || screen === 'dashboard' });
   const [language, setLanguage] = useState('en');
   const [role, setRole] = useState('farmer');
   
@@ -19,7 +25,14 @@ export default function App() {
   const [identifier, setIdentifier] = useState('');
   
   // Current Authenticated User Profile
-  const [currentUser, setCurrentUser] = useState(null);
+  // Read the saved session synchronously so a reload stays logged in.
+  const [currentUser, setCurrentUser] = useState(() => ApiService.getStoredUser());
+
+  // Logged in -> always inside /app; logged out -> never inside /app.
+  useEffect(() => {
+    if (currentUser && screen !== 'dashboard') navigate('/app', { replace: true });
+    if (!currentUser && screen === 'dashboard') navigate('/login', { replace: true });
+  }, [currentUser, screen]);
   
   // UI States
   const [isLoading, setIsLoading] = useState(false);
@@ -37,7 +50,6 @@ export default function App() {
 
     const savedUser = ApiService.getStoredUser();
     if (savedUser) {
-      setCurrentUser(savedUser);
       setRole(savedUser.role);
       const userLang = savedUser.language || savedLang || 'en';
       setLanguage(userLang);
@@ -199,7 +211,7 @@ export default function App() {
         />
       )}
 
-      {screen === 'dashboard' && currentUser && currentUser.role === 'buyer' && (
+      {screen === 'dashboard' && currentUser && ['customer', 'retailer', 'buyer'].includes(currentUser.role) && (
         <BuyerDashboard
           user={currentUser}
           language={language}

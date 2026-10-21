@@ -37,7 +37,13 @@ export function RegistrationScreen({
   isLoading,
   errorMessage,
 }) {
-  const [role, setRole] = useState(initialRole);
+  // UI shows Farmer / Buyer; a buyer is saved with role 'customer' or 'retailer'.
+  const [role, setRole] = useState(initialRole === 'farmer' ? 'farmer' : 'buyer');
+  const [buyerType, setBuyerType] = useState(initialRole === 'retailer' ? 'retailer' : 'customer');
+  const [businessName, setBusinessName] = useState('');
+  const [businessType, setBusinessType] = useState('wholesaler');
+  const [apmcGstNumber, setApmcGstNumber] = useState('');
+  const [deliveryCity, setDeliveryCity] = useState('');
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState(initialPhone.replace('+91', '').trim());
   const [email, setEmail] = useState(initialEmail);
@@ -99,6 +105,10 @@ export function RegistrationScreen({
     if (!state) errors.state = 'Please select your state.';
     if (!district) errors.district = 'Please select your district.';
     if (!taluka.trim()) errors.taluka = 'Taluka is required.';
+    if (role === 'buyer' && buyerType === 'retailer') {
+      if (!businessName.trim()) errors.businessName = 'Business or firm name is required.';
+      if (!deliveryCity.trim()) errors.deliveryCity = 'Primary delivery city / mandi is required.';
+    }
 
     if (Object.keys(errors).length > 0) {
       setFormErrors(errors);
@@ -130,8 +140,13 @@ export function RegistrationScreen({
         taluka: taluka.trim(),
         district,
         state,
-        deliveryCity: district,
+        deliveryCity: buyerType === 'retailer' ? deliveryCity.trim() : district,
         deliveryState: state,
+        ...(buyerType === 'retailer' && {
+          businessName: businessName.trim(),
+          businessType,
+          apmcGstNumber: apmcGstNumber.trim(),
+        }),
       };
     }
 
@@ -139,7 +154,7 @@ export function RegistrationScreen({
       name: fullName.trim(),
       phone: `+91${cleanPhone}`,
       password: password,
-      role,
+      role: role === 'farmer' ? 'farmer' : buyerType,
       language,
       email: email.trim() || '',
       farmerDetails,
@@ -249,6 +264,29 @@ export function RegistrationScreen({
                 </button>
               </div>
             </div>
+
+            {role === 'buyer' && (
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  ['customer', 'Customer', 'Buy produce for yourself'],
+                  ['retailer', 'Retailer', 'Shop, trader or business'],
+                ].map(([value, label, hint]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setBuyerType(value)}
+                    className={`p-3 rounded-xl border-2 text-left transition-all cursor-pointer ${
+                      buyerType === value
+                        ? 'border-[#B8562D] bg-[#FCEEE7] text-[#B8562D]'
+                        : 'border-[#DCD6C8] bg-white text-[#1A1C18]/80 hover:border-[#B8562D]/50'
+                    }`}
+                  >
+                    <div className="font-bold text-sm">{label}</div>
+                    <div className="text-[11px] text-[#1A1C18]/60">{hint}</div>
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* 2. BASIC PROFILE CREDENTIALS */}
             <div className="space-y-4 pt-2 border-t border-[#DCD6C8]/60">
@@ -530,6 +568,82 @@ export function RegistrationScreen({
                 </>
                 )}
               </div>
+
+            {/* 4. RETAILER BUSINESS DETAILS */}
+            {role === 'buyer' && buyerType === 'retailer' && (
+              <div className="space-y-4 pt-2 border-t border-[#DCD6C8]/60">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-[#B8562D] flex items-center gap-1.5">
+                  <Building className="w-4 h-4" />
+                  Retailer Business Details
+                </h3>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
+                      {t.businessName} <span className="text-[#B8562D]">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={businessName}
+                      onChange={(e) => setBusinessName(e.target.value)}
+                      placeholder="e.g. Mahavir Agro Traders"
+                      className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#B8562D] focus:outline-hidden"
+                    />
+                    {formErrors.businessName && (
+                      <p className="text-[#B8562D] text-xs mt-1">{formErrors.businessName}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
+                      {t.businessType}
+                    </label>
+                    <select
+                      value={businessType}
+                      onChange={(e) => setBusinessType(e.target.value)}
+                      className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#B8562D] focus:outline-hidden"
+                    >
+                      <option value="wholesaler">Wholesaler / Mandi Commission Agent</option>
+                      <option value="retailer">Retail Supermarket / Grocery Chain</option>
+                      <option value="processor">Food Processing Mill</option>
+                      <option value="exporter">Agriculture Exporter</option>
+                      <option value="trader">APMC Licensed Trader</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
+                      {t.deliveryCity} <span className="text-[#B8562D]">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={deliveryCity}
+                      onChange={(e) => setDeliveryCity(e.target.value)}
+                      placeholder="e.g. Navi Mumbai APMC"
+                      className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#B8562D] focus:outline-hidden"
+                    />
+                    {formErrors.deliveryCity && (
+                      <p className="text-[#B8562D] text-xs mt-1">{formErrors.deliveryCity}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
+                      {t.gstNumber}
+                    </label>
+                    <input
+                      type="text"
+                      value={apmcGstNumber}
+                      onChange={(e) => setApmcGstNumber(e.target.value)}
+                      placeholder="e.g. APMC-MAH-2024-889"
+                      className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#B8562D] focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* SUBMIT BUTTON */}
             <div className="pt-4 border-t border-[#DCD6C8]">

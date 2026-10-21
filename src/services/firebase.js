@@ -11,7 +11,9 @@ import {
   deleteDoc,
   onSnapshot,
   query,
-  where
+  where,
+  writeBatch,
+  increment,
 } from 'firebase/firestore';
 
 // 1. Initialize Firebase App (values come from .env, see .env.example)
@@ -35,17 +37,16 @@ export const db = initializeFirestore(app, { ignoreUndefinedProperties: true }, 
 export const USERS_COL = 'users';
 export const CROPS_COL = 'crop_listings';
 export const ORDERS_COL = 'orders';
-export const MANDI_COL = 'mandi_rates';
 export const WASTE_COL = 'agri_waste_listings';
 export const SCHEMES_COL = 'govt_schemes';
 export const APPLICATIONS_COL = 'scheme_applications';
 export const RETAILERS_COL = 'retailers';
+export const CARTS_COL = 'carts';
 
 export const collections = {
   users: collection(db, USERS_COL),
   crops: collection(db, CROPS_COL),
   orders: collection(db, ORDERS_COL),
-  mandi: collection(db, MANDI_COL),
   waste: collection(db, WASTE_COL),
   schemes: collection(db, SCHEMES_COL),
   applications: collection(db, APPLICATIONS_COL),
@@ -249,17 +250,6 @@ export function subscribeToOrders(callback) {
   );
 }
 
-export function subscribeToMandiRates(callback) {
-  return onSnapshot(
-    collection(db, MANDI_COL),
-    (snap) => {
-      const rates = snap.docs.map((d) => ({ ...d.data(), id: d.id }));
-      callback(rates);
-    },
-    (err) => console.error('Mandi snapshot error:', err)
-  );
-}
-
 export function subscribeToAgriWaste(callback) {
   return onSnapshot(
     collection(db, WASTE_COL),
@@ -291,21 +281,6 @@ export function subscribeToRetailers(callback) {
     },
     (err) => console.error('Retailers snapshot error:', err)
   );
-}
-
-export async function firebaseSyncMandiRates(rates) {
-  try {
-    for (const rate of rates) {
-      await setDoc(doc(db, MANDI_COL, rate.id), {
-        ...rate,
-        lastUpdated: new Date().toISOString(),
-      }, { merge: true });
-    }
-    return { success: true };
-  } catch (err) {
-    console.error('Mandi rates sync error:', err);
-    return { success: false, error: err.message };
-  }
 }
 
 export function subscribeToSchemeApplications(farmerId, callback) {
@@ -511,4 +486,59 @@ export async function firebaseWithdrawApplication(appId) {
   }
 }
 
+// Customer cart: carts/{userId} = { items: [...] }
+export function subscribeToCart(userId, callback) {
+  return onSnapshot(
+    doc(db, CARTS_COL, userId),
+    (snap) => callback(snap.exists() ? snap.data().items || [] : []),
+    (err) => console.error('Cart snapshot error:', err)
+  );
+}
 
+export async function saveCart(userId, items) {
+  await setDoc(doc(db, CARTS_COL, userId), { items, updatedAt: new Date().toISOString() });
+}
+
+// After a successful payment: one order per cart item (so each farmer sees theirs),
+// reduce each listing's stock and empty the cart, all in one atomic batch.
+export async function placePaidCustomerOrders(user, items, details, paymentId) {
+  const batch = writeBatch(db);
+  const now = new Date().toISOString();
+  const checkoutId = `chk-${Date.now()}`;
+  items.forEach((item, n) => {
+    const id = `ord-${Date.now()}-${n}`;
+    batch.set(doc(db, ORDERS_COL, id), {
+      id,
+      checkoutId,
+      listingId: item.listingId,
+      cropName: item.cropName,
+      produceName: item.cropName,
+      variety: item.variety,
+      imageUrl: item.imageUrl,
+      farmerId: item.farmerId,
+      farmerName: item.farmerName,
+      farmerPhone: item.farmerPhone,
+      buyerId: user.id,
+      buyerName: details.name,
+      buyerPhone: details.phone,
+      buyerRole: 'customer',
+      quantityKg: item.quantityKg,
+      offeredPricePerKg: item.pricePerKg,
+      totalAmount: item.quantityKg * item.pricePerKg,
+      deliveryLocation: details.address,
+      notes: details.note,
+      paymentId,
+      paymentStatus: 'paid',
+      // already paid, so the order starts at "Order Processed"
+      status: 'Accepted',
+      statusTimes: { Accepted: now },
+      orderDate: now.split('T')[0],
+      createdAt: now,
+      updatedAt: now,
+    });
+    batch.update(doc(db, CROPS_COL, item.listingId), { quantityKg: increment(-item.quantityKg) });
+  });
+  batch.set(doc(db, CARTS_COL, user.id), { items: [], updatedAt: now });
+  await batch.commit();
+  return checkoutId;
+}

@@ -42,13 +42,16 @@ import {
   Droplets,
   Percent,
   CheckCircle,
+  ShoppingBag,
 } from 'lucide-react';
 import { TRANSLATIONS } from '../../data/translations';
+import { OrderTracker, nextStep } from '../common/OrderTracker';
+import { navigate, usePath } from '../../utils/router';
+import { ProductPage } from '../common/ProductPage';
 import { LanguageSelector } from '../common/LanguageSelector';
 import {
   subscribeToCropListings,
   subscribeToOrders,
-  subscribeToMandiRates,
   subscribeToAgriWaste,
   subscribeToGovtSchemes,
   firebaseAddCropListing,
@@ -59,7 +62,6 @@ import {
   firebaseAddAgriWaste,
   firebaseUpdateAgriWaste,
   firebaseDeleteAgriWaste,
-  firebaseSyncMandiRates,
 } from '../../services/firebase';
 
 export const CROP_PHOTO_PRESETS = [
@@ -86,6 +88,10 @@ export const WASTE_PHOTO_PRESETS = [
   { name: 'Groundnut Shells', url: 'https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=600&q=80' },
 ];
 
+// Customer listings are priced per kg, retailer listings per quintal.
+const priceText = (l) => (l.pricePerKg != null ? `₹${l.pricePerKg.toLocaleString()}/kg` : `₹${(l.pricePerQuintal ?? 0).toLocaleString()}/Qtl`);
+const orderPriceText = (o) => (o.offeredPricePerKg != null ? `₹${o.offeredPricePerKg}/kg` : `₹${o.offeredPricePerQuintal}/Qtl`);
+
 export function FarmerDashboard({
   user,
   language,
@@ -93,12 +99,20 @@ export function FarmerDashboard({
   onLogout,
   onOpenLanguageModal,
 }) {
-  const [activeTab, setActiveTab] = useState('produce');
+  // URL is the source of truth: /app, /app/tab/<tab>, /app/product/<id>, /app/cart, /app/checkout, /app/success
+  const path = usePath();
+  const seg = path.split('/').filter(Boolean);
+  const activeTab = seg[1] === 'tab' && seg[2] ? seg[2] : 'produce';
+  const setActiveTab = (tab) => navigate(tab === 'produce' ? '/app' : `/app/tab/${tab}`);
+  const productId = seg[1] === 'product' ? decodeURIComponent(seg[2] || '') : null;
+  const openProduct = (id) => {
+    navigate(`/app/product/${encodeURIComponent(id)}`);
+    window.scrollTo(0, 0);
+  };
   const [produceListings, setProduceListings] = useState([]);
   const [agriWasteListings, setAgriWasteListings] = useState([]);
   const [govtSchemes, setGovtSchemes] = useState([]);
   const [orders, setOrders] = useState([]);
-  const [mandiRates, setMandiRates] = useState([]);
 
   // Real-time Firestore sync
   useEffect(() => {
@@ -107,9 +121,6 @@ export function FarmerDashboard({
     });
     const unsubOrders = subscribeToOrders((data) => {
       if (Array.isArray(data)) setOrders(data);
-    });
-    const unsubMandi = subscribeToMandiRates((data) => {
-      if (Array.isArray(data)) setMandiRates(data);
     });
     const unsubWaste = subscribeToAgriWaste((data) => {
       if (Array.isArray(data)) setAgriWasteListings(data);
@@ -121,7 +132,6 @@ export function FarmerDashboard({
     return () => {
       unsubCrops();
       unsubOrders();
-      unsubMandi();
       unsubWaste();
       unsubSchemes();
     };
@@ -161,7 +171,13 @@ export function FarmerDashboard({
   const [variety, setVariety] = useState('');
   const [quantityKg, setQuantityKg] = useState(5000);
   const [pricePerQuintal, setPricePerQuintal] = useState(2400);
+  const [pricePerKg, setPricePerKg] = useState(30);
   const [qualityGrade, setQualityGrade] = useState('A+');
+  const [addAudience, setAddAudience] = useState('retailer');
+  // Older listings without `audience` count as retailer listings.
+  const audienceOf = (listing) => ([].concat(listing.audience || 'retailer').includes('customer') ? 'customer' : 'retailer');
+  const myListings = produceListings.filter((l) => l.farmerId === user.id);
+  const myOrders = orders.filter((o) => o.farmerId === user.id);
   const [isOrganic, setIsOrganic] = useState(user.farmerDetails?.organicCertified ?? true);
   const [cropImage, setCropImage] = useState('');
   const [customImageUrl, setCustomImageUrl] = useState('');
@@ -172,6 +188,7 @@ export function FarmerDashboard({
   const [editVariety, setEditVariety] = useState('');
   const [editQuantityKg, setEditQuantityKg] = useState(5000);
   const [editPricePerQuintal, setEditPricePerQuintal] = useState(2400);
+  const [editPricePerKg, setEditPricePerKg] = useState(null);
   const [editQualityGrade, setEditQualityGrade] = useState('A+');
   const [editIsOrganic, setEditIsOrganic] = useState(true);
   const [editCropImage, setEditCropImage] = useState('');
@@ -303,11 +320,14 @@ export function FarmerDashboard({
       cropName: cropName.trim(),
       variety: variety.trim() || 'Farm Harvest Fresh Lot',
       quantityKg: Number(quantityKg) || 1000,
-      pricePerQuintal: Number(pricePerQuintal) || 2000,
+      ...(addAudience === 'customer'
+        ? { pricePerKg: Number(pricePerKg) || 1 }
+        : { pricePerQuintal: Number(pricePerQuintal) || 2000 }),
       harvestDate: new Date().toISOString().split('T')[0],
       qualityGrade,
       imageUrl: cropImage || 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?auto=format&fit=crop&w=600&q=80',
       isOrganic,
+      audience: addAudience,
       status: 'available',
     };
 
@@ -333,6 +353,7 @@ export function FarmerDashboard({
     setEditVariety(crop.variety || '');
     setEditQuantityKg(crop.quantityKg || 1000);
     setEditPricePerQuintal(crop.pricePerQuintal || 2000);
+    setEditPricePerKg(crop.pricePerKg ?? null);
     setEditQualityGrade(crop.qualityGrade || 'A+');
     setEditIsOrganic(crop.isOrganic ?? true);
     setEditCropImage(crop.imageUrl || '');
@@ -349,7 +370,9 @@ export function FarmerDashboard({
       cropName: editCropName.trim(),
       variety: editVariety.trim(),
       quantityKg: Number(editQuantityKg) || 1000,
-      pricePerQuintal: Number(editPricePerQuintal) || 2000,
+      ...(editPricePerKg != null
+        ? { pricePerKg: Number(editPricePerKg) || 1 }
+        : { pricePerQuintal: Number(editPricePerQuintal) || 2000 }),
       qualityGrade: editQualityGrade,
       isOrganic: editIsOrganic,
       imageUrl: editCropImage || 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?auto=format&fit=crop&w=600&q=80',
@@ -495,41 +518,16 @@ export function FarmerDashboard({
   };
 
   const handleUpdateOrderStatus = async (orderId, newStatus) => {
-    setOrders(orders.map((o) => o.id === orderId ? { ...o, status: newStatus } : o));
-    showToast(`Order #${orderId} marked as "${newStatus}"!`);
+    const at = new Date().toISOString();
+    setOrders(orders.map((o) => o.id === orderId ? { ...o, status: newStatus, statusTimes: { ...o.statusTimes, [newStatus]: at } } : o));
+    showToast(`Order #${orderId.slice(-8).toUpperCase()} marked as "${newStatus}"!`);
     try {
-      await firebaseUpdateOrder(orderId, { status: newStatus });
+      await firebaseUpdateOrder(orderId, { status: newStatus, [`statusTimes.${newStatus}`]: at });
     } catch (err) {
       console.warn('Firestore update order notice:', err);
     }
   };
 
-  // -------------------------------------------------------------
-  // REAL-TIME MANDI RATES SYNC
-  // -------------------------------------------------------------
-
-  const handleSyncMandiRates = async () => {
-    const updated = mandiRates.map((item) => {
-      // Add realistic market fluctuations (+/- 1-3%) with today's date
-      const factor = 1 + (Math.random() * 0.04 - 0.02);
-      const newModalPrice = Math.round(item.modalPrice * factor);
-      const change = newModalPrice - item.modalPrice;
-      const changePercent = Number(((change / item.modalPrice) * 100).toFixed(1));
-      return {
-        ...item,
-        modalPrice: newModalPrice,
-        changePercent,
-        lastUpdated: new Date().toISOString().split('T')[0],
-      };
-    });
-    setMandiRates(updated);
-    showToast("Today's APMC Mandi modal prices refreshed & updated in database!");
-    try {
-      await firebaseSyncMandiRates(updated);
-    } catch (err) {
-      console.warn('Mandi sync error:', err);
-    }
-  };
 
   return (
     <div id="farmer-portal-root" className="min-h-screen bg-[#F4F1E8] text-[#1A1C18] flex flex-col font-body">
@@ -598,28 +596,6 @@ export function FarmerDashboard({
         </div>
       </header>
 
-      {/* Live Mandi Ticker Bar */}
-      <section className="bg-[#1A1C18] text-white py-2 px-4 overflow-hidden border-b border-[#3F6B3A]/40">
-        <div className="max-w-7xl mx-auto flex items-center gap-4 text-xs">
-          <div className="flex items-center gap-1.5 text-[#C0F3B4] font-bold shrink-0 bg-white/10 px-2.5 py-0.5 rounded">
-            <TrendingUp className="w-3.5 h-3.5" />
-            <span>{t.mandiLiveRates || 'Mandi Live Rates'}:</span>
-          </div>
-          
-          <div className="flex items-center gap-6 overflow-x-auto whitespace-nowrap scrollbar-none py-0.5">
-            {mandiRates.map((m) => (
-              <div key={m.id} className="flex items-center gap-1.5 text-xs font-medium">
-                <span className="text-[#F4F1E8]/90 font-semibold">{m.commodity}:</span>
-                <span className="font-bold text-white font-mono">₹{m.modalPrice}/Qtl</span>
-                <span className={`text-[10px] font-bold ${m.changePercent >= 0 ? 'text-[#C0F3B4]' : 'text-[#FFDBD0]'}`}>
-                  {m.changePercent >= 0 ? `+${m.changePercent}%` : `${m.changePercent}%`}
-                </span>
-                <span className="text-[10px] text-[#F4F1E8]/50">({m.market})</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
 
       {/* Toast Notification */}
       {toastMessage && (
@@ -630,6 +606,23 @@ export function FarmerDashboard({
       )}
 
       {/* Main Content Area */}
+      {productId && myListings.some((l) => l.id === productId) ? (() => {
+        const listing = myListings.find((l) => l.id === productId);
+        const section = audienceOf(listing);
+        return (
+          <ProductPage
+            key={listing.id}
+            listing={listing}
+            mode="farmer"
+            orders={myOrders.filter((o) => (o.listingId || o.produceId) === listing.id)}
+            moreFromFarmer={myListings.filter((l) => l.id !== listing.id && audienceOf(l) === section)}
+            onOpenProduct={openProduct}
+            onBack={() => navigate(section === 'customer' ? '/app/tab/produce-customer' : '/app')}
+            onEdit={() => handleOpenEditModal(listing)}
+            onDelete={() => handleOpenDeleteModal(listing)}
+          />
+        );
+      })() : (
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 space-y-6">
         
         {/* Farmer Profile & Quick Stats Card */}
@@ -703,7 +696,20 @@ export function FarmerDashboard({
             }`}
           >
             <Wheat className="w-4 h-4" />
-            <span>{t.tabHarvestLots || 'My Farm Harvest Lots'} ({produceListings.length})</span>
+            <span>Sell to Retailers ({myListings.filter((l) => audienceOf(l) === 'retailer').length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('produce-customer')}
+            className={`flex items-center gap-2 px-4 py-3 border-b-2 font-bold text-sm transition-all whitespace-nowrap cursor-pointer ${
+              activeTab === 'produce-customer'
+                ? 'border-[#3F6B3A] text-[#3F6B3A] bg-white/60 rounded-t-xl'
+                : 'border-transparent text-[#1A1C18]/70 hover:text-[#1A1C18]'
+            }`}
+          >
+            <ShoppingBag className="w-4 h-4" />
+            <span>Sell to Customers ({myListings.filter((l) => audienceOf(l) === 'customer').length})</span>
           </button>
 
           <button
@@ -729,7 +735,7 @@ export function FarmerDashboard({
             }`}
           >
             <FileText className="w-4 h-4" />
-            <span>{t.tabBuyerOrders || 'Incoming Buyer Orders'} ({orders.length})</span>
+            <span>{t.tabBuyerOrders || 'Incoming Buyer Orders'} ({myOrders.length})</span>
           </button>
 
           <button
@@ -745,37 +751,32 @@ export function FarmerDashboard({
             <span>{t.tabGovtSchemes || 'Govt Schemes & Subsidies'}</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('mandi-rates')}
-            className={`flex items-center gap-2 px-4 py-3 border-b-2 font-bold text-sm transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === 'mandi-rates'
-                ? 'border-[#3F6B3A] text-[#3F6B3A] bg-white/60 rounded-t-xl'
-                : 'border-transparent text-[#1A1C18]/70 hover:text-[#1A1C18]'
-            }`}
-          >
-            <TrendingUp className="w-4 h-4" />
-            <span>{t.tabMspIntel || 'Live MSP Intelligence'}</span>
-          </button>
-
         </div>
 
-        {/* TAB 1: MY FARM HARVEST LOTS */}
-        {activeTab === 'produce' && (
+        {/* TAB 1: SELL TO RETAILERS / SELL TO CUSTOMERS (same layout, listings split by audience) */}
+        {(activeTab === 'produce' || activeTab === 'produce-customer') && (() => {
+          const sellTo = activeTab === 'produce-customer' ? 'customer' : 'retailer';
+          const sectionListings = myListings.filter((l) => audienceOf(l) === sellTo);
+          return (
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h2 className="font-headline font-bold text-xl text-[#1A1C18]">
-                  Active Crop Harvest Listings
+                  {sellTo === 'customer' ? 'Selling to Customers' : 'Selling to Retailers'}
                 </h2>
                 <p className="text-xs text-[#1A1C18]/70">
-                  Manage your farm inventory, update pricing per quintal, and receive direct buyer contracts.
+                  {sellTo === 'customer'
+                    ? 'Crops listed here are shown only to customers buying for their homes.'
+                    : 'Crops listed here are shown only to retailers, traders and businesses.'}
                 </p>
               </div>
 
               <button
                 type="button"
-                onClick={() => setIsAddProduceModalOpen(true)}
+                onClick={() => {
+                  setAddAudience(sellTo);
+                  setIsAddProduceModalOpen(true);
+                }}
                 className="flex items-center gap-1.5 bg-[#3F6B3A] hover:bg-[#355B31] text-white font-bold px-4 py-2 rounded-xl text-xs shadow-2xs transition-all cursor-pointer self-start sm:self-auto"
               >
                 <Plus className="w-4 h-4" />
@@ -783,8 +784,14 @@ export function FarmerDashboard({
               </button>
             </div>
 
+            {sectionListings.length === 0 && (
+              <div className="bg-white rounded-2xl p-8 text-center border border-[#DCD6C8] text-sm text-[#1A1C18]/60">
+                No crops listed for {sellTo === 'customer' ? 'customers' : 'retailers'} yet. Use "Add New Produce Batch" to add one.
+              </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              {produceListings.map((listing) => (
+              {sectionListings.map((listing) => (
                 <div
                   key={listing.id}
                   className="bg-white rounded-2xl border border-[#DCD6C8] shadow-xs overflow-hidden flex flex-col hover:border-[#3F6B3A]/40 transition-all"
@@ -793,7 +800,8 @@ export function FarmerDashboard({
                     <img
                       src={listing.imageUrl}
                       alt={listing.cropName}
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-cover cursor-pointer"
+                      onClick={() => openProduct(listing.id)}
                     />
                     <div className="absolute top-3 left-3 flex gap-1.5">
                       <span className="bg-[#1A1C18]/85 text-white text-[11px] font-bold px-2 py-0.5 rounded-md">
@@ -813,13 +821,14 @@ export function FarmerDashboard({
                   <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
                     <div>
                       <div className="flex items-start justify-between gap-1">
-                        <h3 className="font-headline font-bold text-lg text-[#1A1C18]">
+                        <h3 className="font-headline font-bold text-lg text-[#1A1C18] cursor-pointer hover:text-[#3F6B3A] hover:underline"
+                          onClick={() => openProduct(listing.id)}>
                           {listing.cropName}
                         </h3>
                         <div className="text-right">
                           <span className="text-[10px] text-[#1A1C18]/60 block uppercase font-semibold">Your Ask</span>
                           <span className="font-bold text-[#3F6B3A] text-base font-mono">
-                            ₹{listing.pricePerQuintal.toLocaleString()}/Qtl
+                            {priceText(listing)}
                           </span>
                         </div>
                       </div>
@@ -867,7 +876,8 @@ export function FarmerDashboard({
               ))}
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* TAB 2: AGRI-WASTE MONETIZATION (Section 1.4 & 3.4 SRS) */}
         {activeTab === 'agri-waste' && (
@@ -1008,77 +1018,110 @@ export function FarmerDashboard({
               </p>
             </div>
 
-            <div className="space-y-4">
-              {orders.map((order) => (
-                <div
-                  key={order.id}
-                  className="bg-white rounded-2xl p-5 border border-[#DCD6C8] shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4"
-                >
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs font-mono font-bold bg-[#F4F1E8] px-2 py-0.5 rounded border border-[#DCD6C8]">
-                        #{order.id}
-                      </span>
-                      <h3 className="font-headline font-bold text-base text-[#1A1C18]">
-                        {order.produceName} ({order.variety})
-                      </h3>
-                      <span
-                        className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full ${
-                          order.status === 'Accepted'
-                            ? 'bg-[#3F6B3A]/10 text-[#3F6B3A] border border-[#3F6B3A]/30'
-                            : 'bg-[#B8562D]/10 text-[#B8562D] border border-[#B8562D]/30'
-                        }`}
-                      >
-                        {order.status}
-                      </span>
-                    </div>
+            {myOrders.length === 0 && (
+              <div className="bg-white rounded-2xl p-8 text-center border border-[#DCD6C8] text-sm text-[#1A1C18]/60">
+                No orders yet.
+              </div>
+            )}
 
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#1A1C18]/70">
-                      <span>Buyer: <strong className="text-[#1A1C18]">{order.buyerName}</strong> ({order.buyerFirm})</span>
-                      <span>&bull; Contact: <strong>{order.buyerPhone}</strong></span>
-                      <span>&bull; Destination: {order.deliveryLocation}</span>
-                    </div>
+            {[
+              ['retailer', 'Orders from Retailers'],
+              ['customer', 'Orders from Customers'],
+            ].map(([group, title]) => {
+              const groupOrders = myOrders.filter((o) => (o.buyerRole === 'customer' ? 'customer' : 'retailer') === group);
+              if (groupOrders.length === 0) return null;
+              return (
+                <div key={group} className="space-y-3">
+                  <h3 className="font-headline font-bold text-base text-[#1A1C18] flex items-center gap-2">
+                    {title}
+                    <span className="text-xs font-semibold text-[#1A1C18]/60">({groupOrders.length})</span>
+                  </h3>
+                  <div className="space-y-4">
+                  {groupOrders.map((order) => (
+                    <div
+                      key={order.id}
+                      className="bg-white rounded-2xl p-5 border border-[#DCD6C8] shadow-xs space-y-4"
+                    >
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs font-mono font-bold bg-[#F4F1E8] px-2 py-0.5 rounded border border-[#DCD6C8]">
+                            #{order.id}
+                          </span>
+                          <h3 className="font-headline font-bold text-base text-[#1A1C18]">
+                            {order.produceName} ({order.variety})
+                          </h3>
+                          <span
+                            className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full ${
+                              order.status === 'Accepted'
+                                ? 'bg-[#3F6B3A]/10 text-[#3F6B3A] border border-[#3F6B3A]/30'
+                                : 'bg-[#B8562D]/10 text-[#B8562D] border border-[#B8562D]/30'
+                            }`}
+                          >
+                            {order.status}
+                          </span>
+                        </div>
 
-                    {order.notes && (
-                      <p className="text-xs text-[#1A1C18]/80 italic bg-[#F4F1E8] p-2 rounded-lg border border-[#DCD6C8]/60">
-                        "{order.notes}"
-                      </p>
-                    )}
-                  </div>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#1A1C18]/70">
+                          <span>Buyer: <strong className="text-[#1A1C18]">{order.buyerName}</strong> {order.buyerFirm && ` (${order.buyerFirm})`}</span>
+                          <span>&bull; Contact: <strong>{order.buyerPhone}</strong></span>
+                          <span>&bull; Destination: {order.deliveryLocation}</span>
+                        </div>
 
-                  <div className="flex flex-col md:items-end gap-3 shrink-0 pt-3 md:pt-0 border-t md:border-t-0 border-[#EBE7DC]">
-                    <div className="text-left md:text-right">
-                      <div className="text-xs text-[#1A1C18]/60">Offered Deal Total</div>
-                      <div className="font-headline font-bold text-xl text-[#3F6B3A] font-mono">
-                        ₹{order.totalAmount.toLocaleString()}
+                        {order.notes && (
+                          <p className="text-xs text-[#1A1C18]/80 italic bg-[#F4F1E8] p-2 rounded-lg border border-[#DCD6C8]/60">
+                            "{order.notes}"
+                          </p>
+                        )}
                       </div>
-                      <div className="text-[11px] text-[#1A1C18]/70">
-                        {order.quantityKg} kg @ ₹{order.offeredPricePerQuintal}/Qtl
+
+                      <div className="flex flex-col md:items-end gap-3 shrink-0 pt-3 md:pt-0 border-t md:border-t-0 border-[#EBE7DC]">
+                        <div className="text-left md:text-right">
+                          <div className="text-xs text-[#1A1C18]/60">Offered Deal Total</div>
+                          <div className="font-headline font-bold text-xl text-[#3F6B3A] font-mono">
+                            ₹{order.totalAmount.toLocaleString()}
+                          </div>
+                          <div className="text-[11px] text-[#1A1C18]/70">
+                            {order.quantityKg} kg @ {orderPriceText(order)}
+                          </div>
+                        </div>
+
+                        {order.status !== 'Rejected' && !['pending', 'Pending Confirmation'].includes(order.status) && nextStep(order.status) && (
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateOrderStatus(order.id, nextStep(order.status).status)}
+                            className="px-3.5 py-1.5 bg-[#3F6B3A] hover:bg-[#355B31] text-white rounded-lg text-xs font-bold transition-all cursor-pointer shadow-2xs"
+                          >
+                            {nextStep(order.status).action}
+                          </button>
+                        )}
+                        {['pending', 'Pending Confirmation'].includes(order.status) && (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateOrderStatus(order.id, 'Accepted')}
+                              className="px-3.5 py-1.5 bg-[#3F6B3A] hover:bg-[#355B31] text-white rounded-lg text-xs font-bold transition-all cursor-pointer shadow-2xs"
+                            >
+                              Accept Order
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateOrderStatus(order.id, 'Rejected')}
+                              className="px-3.5 py-1.5 bg-[#B8562D]/10 hover:bg-[#B8562D]/20 text-[#B8562D] rounded-lg text-xs font-bold transition-all cursor-pointer"
+                            >
+                              Decline
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
-
-                    {order.status === 'Pending Confirmation' && (
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleUpdateOrderStatus(order.id, 'Accepted')}
-                          className="px-3.5 py-1.5 bg-[#3F6B3A] hover:bg-[#355B31] text-white rounded-lg text-xs font-bold transition-all cursor-pointer shadow-2xs"
-                        >
-                          Accept Order
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleUpdateOrderStatus(order.id, 'Rejected')}
-                          className="px-3.5 py-1.5 bg-[#B8562D]/10 hover:bg-[#B8562D]/20 text-[#B8562D] rounded-lg text-xs font-bold transition-all cursor-pointer"
-                        >
-                          Decline
-                        </button>
-                      </div>
-                    )}
+                    <OrderTracker order={order} />
+                    </div>
+                  ))}
                   </div>
                 </div>
-              ))}
-            </div>
+              );
+            })}
           </div>
         )}
 
@@ -1484,7 +1527,7 @@ export function FarmerDashboard({
                     type="text"
                     value={schemeSearchQuery}
                     onChange={(e) => setSchemeSearchQuery(e.target.value)}
-                    placeholder="Search schemes by name, keyword, or benefits..."
+                    placeholder="Search schemes by name, benefit, document, eligibility..."
                     className="w-full pl-9 pr-8 py-2 rounded-xl border border-[#DCD6C8] bg-white text-xs focus:border-[#3F6B3A] focus:outline-hidden"
                   />
                   {schemeSearchQuery && (
@@ -1516,17 +1559,14 @@ export function FarmerDashboard({
                 </div>
               </div>
 
-              {/* Grid of Government Schemes */}
+              {/* Schemes list: compact rows grouped by Central / State, "View more" opens full details */}
               {(() => {
+                const query = schemeSearchQuery.toLowerCase().trim();
                 const filtered = govtSchemes.filter((s) => {
                   const matchesCat = selectedSchemeCategory === 'All' || s.category === selectedSchemeCategory;
-                  const query = schemeSearchQuery.toLowerCase().trim();
-                  const matchesSearch = !query ||
-                    s.name.toLowerCase().includes(query) ||
-                    s.code.toLowerCase().includes(query) ||
-                    s.description.toLowerCase().includes(query) ||
-                    s.benefitAmount.toLowerCase().includes(query);
-                  return matchesCat && matchesSearch;
+                  const haystack = [s.name, s.code, s.category, s.ministry, s.benefitAmount, s.description, s.eligibility, s.howToApply, ...(s.requiredDocuments || [])]
+                    .filter(Boolean).join(' ').toLowerCase();
+                  return matchesCat && (!query || haystack.includes(query));
                 });
 
                 if (filtered.length === 0) {
@@ -1549,121 +1589,117 @@ export function FarmerDashboard({
                   );
                 }
 
+                const isState = (s) => /maharashtra/i.test(s.ministry || '');
+                const groups = [
+                  ['Central Government Schemes', filtered.filter((s) => !isState(s))],
+                  ['State Government Schemes (Maharashtra)', filtered.filter(isState)],
+                ].filter(([, list]) => list.length > 0);
+                const selected = govtSchemes.find((s) => s.id === expandedSchemeId);
+
                 return (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                    {filtered.map((scheme) => {
-                      const isExpanded = expandedSchemeId === scheme.id;
-
-                      return (
-                        <div
-                          key={scheme.id}
-                          className="bg-white rounded-2xl p-5 border border-[#DCD6C8] shadow-xs flex flex-col justify-between space-y-4 hover:border-[#3F6B3A]/40 transition-all group"
-                        >
-                          <div className="space-y-3">
-                            <div className="flex items-start justify-between gap-2">
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-[11px] font-bold bg-[#3F6B3A]/10 text-[#3F6B3A] px-2.5 py-0.5 rounded-full border border-[#3F6B3A]/20 font-mono">
-                                    {scheme.code}
-                                  </span>
-                                  <span className="text-[10px] text-[#1A1C18]/60 uppercase font-semibold">
-                                    {scheme.category}
-                                  </span>
+                  <div className="space-y-5">
+                    {groups.map(([title, list]) => (
+                      <div key={title} className="bg-white rounded-2xl border border-[#DCD6C8] overflow-hidden">
+                        <div className="px-4 py-2.5 bg-[#F4F1E8] border-b border-[#DCD6C8] flex items-center justify-between">
+                          <h3 className="font-headline font-bold text-sm text-[#1A1C18]">{title}</h3>
+                          <span className="text-xs font-semibold text-[#1A1C18]/60">{list.length}</span>
+                        </div>
+                        <ul className="divide-y divide-[#EBE7DC]">
+                          {list.map((scheme) => (
+                            <li key={scheme.id} className="px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 hover:bg-[#F4F1E8]/50">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  {scheme.code && (
+                                    <span className="text-[10px] font-bold bg-[#3F6B3A]/10 text-[#3F6B3A] px-2 py-0.5 rounded-full font-mono">{scheme.code}</span>
+                                  )}
+                                  <span className="text-[10px] text-[#1A1C18]/60 uppercase font-semibold">{scheme.category}</span>
                                 </div>
-                                <h3 className="font-headline font-bold text-base text-[#1A1C18] mt-1.5">
-                                  {scheme.name}
-                                </h3>
+                                <h4 className="font-bold text-sm text-[#1A1C18] mt-1">{scheme.name}</h4>
+                                <p className="text-xs text-[#3F6B3A] font-semibold mt-0.5">{scheme.benefitAmount}</p>
                               </div>
-                              <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-[#E2ECD8] text-[#3F6B3A] border border-[#3F6B3A]/30 shrink-0">
-                                {scheme.applicationStatus || 'Open'}
-                              </span>
-                            </div>
-
-                            {/* Direct Benefit Highlight */}
-                            <div className="bg-[#F4F1E8] p-3 rounded-xl border border-[#DCD6C8]/60 text-xs">
-                              <span className="font-semibold text-[#1A1C18]/70 block">Direct Scheme Benefit:</span>
-                              <strong className="text-sm font-bold text-[#3F6B3A]">{scheme.benefitAmount}</strong>
-                            </div>
-
-                            <p className="text-xs text-[#1A1C18]/80 leading-relaxed">
-                              {scheme.description}
-                            </p>
-
-                            {/* Eligibility */}
-                            <div className="flex items-start gap-1.5 text-xs text-[#3F6B3A] bg-[#E2ECD8]/60 p-2.5 rounded-lg border border-[#3F6B3A]/20">
-                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                              <span>
-                                <strong>Farmer Eligibility:</strong> {scheme.eligibility}
-                              </span>
-                            </div>
-
-                            {/* Required Documents */}
-                            {scheme.requiredDocuments && scheme.requiredDocuments.length > 0 && (
-                              <div>
-                                <span className="text-[10px] font-semibold text-[#1A1C18]/60 uppercase block mb-1">
-                                  Required Documents:
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-[#E2ECD8] text-[#3F6B3A] border border-[#3F6B3A]/30">
+                                  {scheme.applicationStatus || 'Open'}
                                 </span>
-                                <div className="flex flex-wrap gap-1.5">
-                                  {scheme.requiredDocuments.map((docName, idx) => (
-                                    <span
-                                      key={idx}
-                                      className="text-[10px] bg-[#F4F1E8] text-[#1A1C18]/80 px-2 py-0.5 rounded border border-[#DCD6C8]"
-                                    >
-                                      {docName}
-                                    </span>
-                                  ))}
-                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedSchemeId(scheme.id)}
+                                  className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-[#3F6B3A] hover:bg-[#355B31] text-white cursor-pointer"
+                                >
+                                  View more
+                                </button>
                               </div>
-                            )}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
 
-                            {/* Expandable Official Guidelines & Helpline */}
-                            {isExpanded && (
-                              <div className="pt-3 border-t border-[#EBE7DC] space-y-2.5 text-xs bg-[#F4F1E8]/70 p-3.5 rounded-xl border border-[#DCD6C8] animate-in fade-in">
-                                {scheme.ministry && (
-                                  <div>
-                                    <span className="text-[10px] font-semibold text-[#1A1C18]/60 uppercase block">Nodal Ministry:</span>
-                                    <span className="text-[#1A1C18] font-bold">{scheme.ministry}</span>
-                                  </div>
-                                )}
-                                {scheme.howToApply && (
-                                  <div>
-                                    <span className="text-[10px] font-semibold text-[#1A1C18]/60 uppercase block">How to Apply:</span>
-                                    <p className="text-[#1A1C18]/80 mt-0.5">{scheme.howToApply}</p>
-                                  </div>
-                                )}
-                                {scheme.helpline && (
-                                  <div className="flex items-center gap-1.5 text-[#3F6B3A] font-semibold pt-1">
-                                    <Phone className="w-3.5 h-3.5" />
-                                    <span>Toll-Free Helpline: {scheme.helpline}</span>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Footer Action Buttons */}
-                          <div className="pt-3 border-t border-[#EBE7DC] flex items-center justify-between gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setExpandedSchemeId(isExpanded ? null : scheme.id)}
-                              className="text-xs font-bold text-[#1A1C18]/70 hover:text-[#3F6B3A] transition-colors cursor-pointer flex items-center gap-1"
-                            >
-                              <span>{isExpanded ? 'Hide Guidelines' : 'Guidelines & Helpline'}</span>
+                    {selected && (
+                      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs" onClick={() => setExpandedSchemeId(null)}>
+                        <div className="bg-white w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl shadow-2xl border border-[#DCD6C8]" onClick={(e) => e.stopPropagation()}>
+                          <div className="p-4 bg-[#3F6B3A] text-white flex items-start justify-between gap-3 sticky top-0">
+                            <div>
+                              <div className="text-[11px] font-mono opacity-80">{[selected.code, selected.category].filter(Boolean).join(' · ')}</div>
+                              <h3 className="font-headline font-bold text-lg">{selected.name}</h3>
+                            </div>
+                            <button type="button" onClick={() => setExpandedSchemeId(null)} className="p-1 rounded-lg hover:bg-white/20 cursor-pointer" aria-label="Close">
+                              <X className="w-5 h-5" />
                             </button>
-
-                            <a
-                              href={scheme.portalLink}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs bg-[#3F6B3A] hover:bg-[#355B31] text-white"
-                            >
-                              <span>Visit Official Portal</span>
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </a>
+                          </div>
+                          <div className="p-5 space-y-4 text-xs">
+                            <div className="bg-[#F4F1E8] p-3 rounded-xl border border-[#DCD6C8]/60">
+                              <span className="font-semibold text-[#1A1C18]/70 block">Direct Scheme Benefit:</span>
+                              <strong className="text-sm font-bold text-[#3F6B3A]">{selected.benefitAmount}</strong>
+                            </div>
+                            <p className="text-[#1A1C18]/80 leading-relaxed">{selected.description}</p>
+                            {selected.eligibility && (
+                              <div className="flex items-start gap-1.5 text-[#3F6B3A] bg-[#E2ECD8]/60 p-2.5 rounded-lg border border-[#3F6B3A]/20">
+                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                <span><strong>Farmer Eligibility:</strong> {selected.eligibility}</span>
+                              </div>
+                            )}
+                            {selected.requiredDocuments?.length > 0 && (
+                              <div>
+                                <span className="text-[10px] font-semibold text-[#1A1C18]/60 uppercase block mb-1">Required Documents:</span>
+                                <ul className="list-disc pl-5 space-y-0.5 text-[#1A1C18]/80">
+                                  {selected.requiredDocuments.map((d, i) => <li key={i}>{d}</li>)}
+                                </ul>
+                              </div>
+                            )}
+                            {selected.howToApply && (
+                              <div>
+                                <span className="text-[10px] font-semibold text-[#1A1C18]/60 uppercase block mb-1">How to Apply:</span>
+                                <p className="text-[#1A1C18]/80 leading-relaxed">{selected.howToApply}</p>
+                              </div>
+                            )}
+                            {selected.ministry && (
+                              <div>
+                                <span className="text-[10px] font-semibold text-[#1A1C18]/60 uppercase block">Nodal Ministry / Department:</span>
+                                <span className="text-[#1A1C18] font-bold">{selected.ministry}</span>
+                              </div>
+                            )}
+                            {selected.helpline && (
+                              <div className="flex items-center gap-1.5 text-[#3F6B3A] font-semibold">
+                                <Phone className="w-3.5 h-3.5" />
+                                <span>Toll-Free Helpline: {selected.helpline}</span>
+                              </div>
+                            )}
+                            {selected.portalLink && (
+                              <a
+                                href={selected.portalLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex px-4 py-2 rounded-xl font-bold items-center gap-1.5 bg-[#3F6B3A] hover:bg-[#355B31] text-white"
+                              >
+                                <span>Visit Official Portal</span>
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </a>
+                            )}
                           </div>
                         </div>
-                      );
-                    })}
+                      </div>
+                    )}
                   </div>
                 );
               })()}
@@ -1671,69 +1707,8 @@ export function FarmerDashboard({
           </div>
         )}
 
-        {/* TAB 5: MANDI PRICE TRENDS */}
-        {activeTab === 'mandi-rates' && (
-          <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h2 className="font-headline font-bold text-xl text-[#1A1C18]">
-                  Real-Time APMC Mandi Modal Prices (₹ / Quintal)
-                </h2>
-                <p className="text-xs text-[#1A1C18]/70">
-                  Daily benchmark modal prices from major APMC trading yards (Lasalgaon, Azadpur, Indore, Rajkot, etc.).
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleSyncMandiRates}
-                className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-[#F4F1E8] border border-[#3F6B3A]/40 text-[#3F6B3A] text-xs font-bold rounded-xl shadow-2xs transition-all cursor-pointer self-start sm:self-auto"
-              >
-                <TrendingUp className="w-3.5 h-3.5" />
-                <span>Sync Today's Mandi Rates</span>
-              </button>
-            </div>
-
-            <div className="bg-white rounded-2xl border border-[#DCD6C8] shadow-xs overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-[#F4F1E8] border-b border-[#DCD6C8] font-bold text-[#1A1C18] uppercase tracking-wider">
-                    <tr>
-                      <th className="py-3 px-4">Commodity</th>
-                      <th className="py-3 px-4">Mandi & State</th>
-                      <th className="py-3 px-4">Min Price</th>
-                      <th className="py-3 px-4">Max Price</th>
-                      <th className="py-3 px-4">Modal Price</th>
-                      <th className="py-3 px-4">Daily Trend</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#EBE7DC]">
-                    {mandiRates.map((rate) => (
-                      <tr key={rate.id} className="hover:bg-[#F4F1E8]/50 transition-colors">
-                        <td className="py-3.5 px-4 font-bold text-[#1A1C18]">{rate.commodity}</td>
-                        <td className="py-3.5 px-4 text-[#1A1C18]/80">{rate.market}, {rate.state}</td>
-                        <td className="py-3.5 px-4 font-mono">₹{rate.minPrice}</td>
-                        <td className="py-3.5 px-4 font-mono">₹{rate.maxPrice}</td>
-                        <td className="py-3.5 px-4 font-mono font-bold text-[#3F6B3A] text-sm">₹{rate.modalPrice}</td>
-                        <td className="py-3.5 px-4">
-                          <span
-                            className={`inline-flex items-center gap-1 font-bold px-2 py-0.5 rounded text-[11px] ${
-                              rate.changePercent >= 0 ? 'bg-[#E2ECD8] text-[#3F6B3A]' : 'bg-[#FFDBD0] text-[#B8562D]'
-                            }`}
-                          >
-                            {rate.changePercent >= 0 ? `+${rate.changePercent}%` : `${rate.changePercent}%`}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
       </main>
+      )}
 
       {/* Modal: Add Produce Batch */}
       {isAddProduceModalOpen && (
@@ -1742,7 +1717,7 @@ export function FarmerDashboard({
             <div className="p-4 bg-[#3F6B3A] text-white flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Wheat className="w-5 h-5" />
-                <h3 className="font-headline font-bold text-lg">Post New Harvest Batch</h3>
+                <h3 className="font-headline font-bold text-lg">Post New Harvest Batch – {addAudience === 'customer' ? 'For Customers' : 'For Retailers'}</h3>
               </div>
               <button
                 type="button"
@@ -1797,13 +1772,15 @@ export function FarmerDashboard({
 
                 <div>
                   <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
-                    Ask Price (₹/Quintal)
+                    {addAudience === 'customer' ? 'Price (₹/kg)' : 'Ask Price (₹/Quintal)'}
                   </label>
                   <input
                     type="number"
                     min="500"
-                    value={pricePerQuintal}
-                    onChange={(e) => setPricePerQuintal(parseInt(e.target.value) || 2000)}
+                    value={addAudience === 'customer' ? pricePerKg : pricePerQuintal}
+                    onChange={(e) => (addAudience === 'customer'
+                      ? setPricePerKg(parseFloat(e.target.value) || 1)
+                      : setPricePerQuintal(parseInt(e.target.value) || 2000))}
                     className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm focus:border-[#3F6B3A] focus:outline-hidden"
                   />
                 </div>
@@ -2006,13 +1983,15 @@ export function FarmerDashboard({
 
                 <div>
                   <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
-                    Ask Price (₹/Quintal)
+                    {editPricePerKg != null ? 'Price (₹/kg)' : 'Ask Price (₹/Quintal)'}
                   </label>
                   <input
                     type="number"
                     min="100"
-                    value={editPricePerQuintal}
-                    onChange={(e) => setEditPricePerQuintal(parseInt(e.target.value) || 2000)}
+                    value={editPricePerKg != null ? editPricePerKg : editPricePerQuintal}
+                    onChange={(e) => (editPricePerKg != null
+                      ? setEditPricePerKg(parseFloat(e.target.value) || 1)
+                      : setEditPricePerQuintal(parseInt(e.target.value) || 2000))}
                     className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm focus:border-[#3F6B3A] focus:outline-hidden"
                   />
                 </div>
