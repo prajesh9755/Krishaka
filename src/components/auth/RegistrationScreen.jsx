@@ -58,15 +58,6 @@ export function RegistrationScreen({
   const [kisanCardNumber, setKisanCardNumber] = useState('');
   const [bankUpiId, setBankUpiId] = useState('');
 
-  // Buyer fields
-  const [businessName, setBusinessName] = useState('');
-  const [contactPerson, setContactPerson] = useState('');
-  const [businessType, setBusinessType] = useState('wholesaler');
-  const [apmcGstNumber, setApmcGstNumber] = useState('');
-  const [deliveryCity, setDeliveryCity] = useState('');
-  const [buyerState, setBuyerState] = useState('');
-  const [preferredProduce, setPreferredProduce] = useState(['Red Onion', 'Wheat', 'Basmati Rice']);
-  const [monthlyCapacity, setMonthlyCapacity] = useState(50);
 
   const [formErrors, setFormErrors] = useState({});
 
@@ -79,16 +70,6 @@ export function RegistrationScreen({
       }
     } else {
       setSelectedCrops([...selectedCrops, crop]);
-    }
-  };
-
-  const toggleProduce = (prod) => {
-    if (preferredProduce.includes(prod)) {
-      if (preferredProduce.length > 1) {
-        setPreferredProduce(preferredProduce.filter((p) => p !== prod));
-      }
-    } else {
-      setPreferredProduce([...preferredProduce, prod]);
     }
   };
 
@@ -114,15 +95,10 @@ export function RegistrationScreen({
       errors.confirmPassword = 'Passwords do not match.';
     }
 
-    if (role === 'farmer') {
-      if (!village.trim()) errors.village = 'Village name is required.';
-      if (!state) errors.state = 'Please select your state.';
-      if (!district) errors.district = 'Please select your district.';
-      if (!taluka.trim()) errors.taluka = 'Taluka is required.';
-    } else {
-      if (!businessName.trim()) errors.businessName = 'Business or firm name is required.';
-      if (!deliveryCity.trim()) errors.deliveryCity = 'Primary delivery city / mandi is required.';
-    }
+    if (!village.trim()) errors.village = 'Village name is required.';
+    if (!state) errors.state = 'Please select your state.';
+    if (!district) errors.district = 'Please select your district.';
+    if (!taluka.trim()) errors.taluka = 'Taluka is required.';
 
     if (Object.keys(errors).length > 0) {
       setFormErrors(errors);
@@ -150,14 +126,12 @@ export function RegistrationScreen({
       };
     } else {
       buyerDetails = {
-        businessName: businessName.trim(),
-        contactPerson: contactPerson.trim() || fullName.trim(),
-        businessType,
-        apmcGstNumber: apmcGstNumber.trim() || '',
-        deliveryCity: deliveryCity.trim(),
-        deliveryState: buyerState,
-        preferredProduce: preferredProduce,
-        tradeCapacityTonsMonthly: Number(monthlyCapacity) || 50,
+        village: village.trim(),
+        taluka: taluka.trim(),
+        district,
+        state,
+        deliveryCity: district,
+        deliveryState: state,
       };
     }
 
@@ -412,13 +386,54 @@ export function RegistrationScreen({
 
             </div>
 
-            {/* 3. FARMER-SPECIFIC DETAILS */}
-            {role === 'farmer' && (
+            {/* 3. LOCATION (both roles); land & crops are farmer-only */}
               <div className="space-y-4 pt-2 border-t border-[#DCD6C8]/60">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-[#3F6B3A] flex items-center gap-1.5">
                   <MapPin className="w-4 h-4" />
-                  Farm Location & Crop Particulars
+                  {role === 'farmer' ? 'Farm Location & Crop Particulars' : 'Location'}
                 </h3>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
+                      {t.state} <span className="text-[#B8562D]">*</span>
+                    </label>
+                    <select
+                      value={state}
+                      onChange={(e) => { setState(e.target.value); setDistrict(''); }}
+                      className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#3F6B3A] focus:outline-hidden"
+                    >
+                      <option value="">Select state</option>
+                      {Object.keys(STATE_DISTRICTS).map((st) => (
+                        <option key={st} value={st}>{st}</option>
+                      ))}
+                    </select>
+                    {formErrors.state && (
+                      <p className="text-[#B8562D] text-xs mt-1">{formErrors.state}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
+                      {t.district} <span className="text-[#B8562D]">*</span>
+                    </label>
+                    <select
+                      key={state} // remount per state so Google Translate translates the new options
+                      value={district}
+                      onChange={(e) => setDistrict(e.target.value)}
+                      disabled={!state}
+                      className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#3F6B3A] focus:outline-hidden disabled:opacity-50"
+                    >
+                      <option value="">{state ? 'Select district' : 'Select state first'}</option>
+                      {districtOptions.map((d) => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                    {formErrors.district && (
+                      <p className="text-[#B8562D] text-xs mt-1">{formErrors.district}</p>
+                    )}
+                  </div>
+                </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
@@ -454,47 +469,8 @@ export function RegistrationScreen({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
-                      {t.state} <span className="text-[#B8562D]">*</span>
-                    </label>
-                    <select
-                      value={state}
-                      onChange={(e) => { setState(e.target.value); setDistrict(''); }}
-                      className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#3F6B3A] focus:outline-hidden"
-                    >
-                      <option value="">Select state</option>
-                      {Object.keys(STATE_DISTRICTS).map((st) => (
-                        <option key={st} value={st}>{st}</option>
-                      ))}
-                    </select>
-                    {formErrors.state && (
-                      <p className="text-[#B8562D] text-xs mt-1">{formErrors.state}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
-                      {t.district} <span className="text-[#B8562D]">*</span>
-                    </label>
-                    <select
-                      value={district}
-                      onChange={(e) => setDistrict(e.target.value)}
-                      disabled={!state}
-                      className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#3F6B3A] focus:outline-hidden disabled:opacity-50"
-                    >
-                      <option value="">{state ? 'Select district' : 'Select state first'}</option>
-                      {districtOptions.map((d) => (
-                        <option key={d} value={d}>{d}</option>
-                      ))}
-                    </select>
-                    {formErrors.district && (
-                      <p className="text-[#B8562D] text-xs mt-1">{formErrors.district}</p>
-                    )}
-                  </div>
-                </div>
-
+                {role === 'farmer' && (
+                <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
 
                   <div>
@@ -551,84 +527,9 @@ export function RegistrationScreen({
                     Practices Organic / Zero-chemical farming (Organic badge certified)
                   </label>
                 </div>
+                </>
+                )}
               </div>
-            )}
-
-            {/* 4. BUYER-SPECIFIC DETAILS */}
-            {role === 'buyer' && (
-              <div className="space-y-4 pt-2 border-t border-[#DCD6C8]/60">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-[#B8562D] flex items-center gap-1.5">
-                  <Building className="w-4 h-4" />
-                  Business & APMC Procurement Details
-                </h3>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
-                      {t.businessName} <span className="text-[#B8562D]">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={businessName}
-                      onChange={(e) => setBusinessName(e.target.value)}
-                      placeholder="e.g. Mahavir Agro Traders"
-                      className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#B8562D] focus:outline-hidden"
-                    />
-                    {formErrors.businessName && (
-                      <p className="text-[#B8562D] text-xs mt-1">{formErrors.businessName}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
-                      {t.businessType}
-                    </label>
-                    <select
-                      value={businessType}
-                      onChange={(e) => setBusinessType(e.target.value)}
-                      className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#B8562D] focus:outline-hidden"
-                    >
-                      <option value="wholesaler">Wholesaler / Mandi Commission Agent</option>
-                      <option value="retailer">Retail Supermarket / Grocery Chain</option>
-                      <option value="processor">Food Processing Mill</option>
-                      <option value="exporter">Agriculture Exporter</option>
-                      <option value="trader">APMC Licensed Trader</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
-                      {t.deliveryCity} <span className="text-[#B8562D]">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={deliveryCity}
-                      onChange={(e) => setDeliveryCity(e.target.value)}
-                      placeholder="e.g. Navi Mumbai APMC"
-                      className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#B8562D] focus:outline-hidden"
-                    />
-                    {formErrors.deliveryCity && (
-                      <p className="text-[#B8562D] text-xs mt-1">{formErrors.deliveryCity}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-[#1A1C18] mb-1">
-                      {t.gstNumber}
-                    </label>
-                    <input
-                      type="text"
-                      value={apmcGstNumber}
-                      onChange={(e) => setApmcGstNumber(e.target.value)}
-                      placeholder="e.g. APMC-MAH-2024-889"
-                      className="w-full py-2.5 px-3 rounded-lg border border-[#DCD6C8] text-sm text-[#1A1C18] bg-white focus:border-[#B8562D] focus:outline-hidden"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
 
             {/* SUBMIT BUTTON */}
             <div className="pt-4 border-t border-[#DCD6C8]">

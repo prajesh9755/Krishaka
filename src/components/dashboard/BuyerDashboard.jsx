@@ -100,7 +100,7 @@ export function BuyerDashboard({
   const [selectedListingForOrder, setSelectedListingForOrder] = useState(null);
   const [orderQuantityKg, setOrderQuantityKg] = useState(1000);
   const [offeredPrice, setOfferedPrice] = useState(2000);
-  const [deliveryMandi, setDeliveryMandi] = useState(user.buyerDetails?.deliveryCity || 'Navi Mumbai APMC');
+  const [deliveryMandi, setDeliveryMandi] = useState(user.buyerDetails?.deliveryCity || '');
   const [orderNotes, setOrderNotes] = useState('');
   const [toastMessage, setToastMessage] = useState('');
 
@@ -1196,7 +1196,7 @@ export function BuyerDashboard({
                 <div className="flex justify-between items-center">
                   <span className="text-[#1A1C18]/60">Delivery Hub</span>
                   <span className="font-bold text-[#1A1C18]">
-                    {user.buyerDetails?.deliveryCity || 'Navi Mumbai APMC'}
+                    {user.buyerDetails?.deliveryCity}
                   </span>
                 </div>
               </div>

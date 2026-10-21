@@ -52,7 +52,7 @@ export const TRANSLATIONS = {
     buyerRegistrationTitle: 'Buyer Profile Registration',
     fullName: 'Full Name',
     namePlaceholder: 'Enter your full name',
-    villageName: 'Village / Town',
+    villageName: 'Village',
     district: 'District',
     state: 'State',
     pincode: 'PIN Code',
